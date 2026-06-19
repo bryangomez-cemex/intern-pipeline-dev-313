@@ -1,0 +1,16 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+.env
+.venv/
+
+data/*.xlsx
+data/error_reports/
+data/email_attachments/
+data/email_intake_downloads/
+
+intake_files_processed/
+intake_files_failed/
+
+azure_function_app/local.settings.json
