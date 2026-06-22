@@ -45,32 +45,33 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os
           import xml.etree.ElementTree as ET
+          from urllib.parse import urlparse
 
           xml = os.environ["PUBLISH_PROFILE"]
           root = ET.fromstring(xml)
 
-          profiles = root.findall(".//publishProfile")
           selected = None
-
-          for p in profiles:
+          for p in root.findall(".//publishProfile"):
               url = p.attrib.get("publishUrl", "")
-              method = p.attrib.get("publishMethod", "")
-              if ".scm." in url or method.lower() in {"zipdeploy", "msdeploy"}:
+              if ".scm." in url:
                   selected = p
                   break
 
           if selected is None:
               raise SystemExit("No SCM/Kudu publish profile found")
 
-          publish_url = selected.attrib["publishUrl"]
+          raw_url = selected.attrib["publishUrl"]
           username = selected.attrib["userName"]
           password = selected.attrib["userPWD"]
 
-          if not publish_url.startswith("http"):
-              publish_url = "https://" + publish_url
+          if not raw_url.startswith("http"):
+              raw_url = "https://" + raw_url
 
-          publish_url = publish_url.rstrip("/")
-          zipdeploy_url = publish_url + "/api/zipdeploy"
+          parsed = urlparse(raw_url)
+          host = parsed.netloc or parsed.path.split("/")[0]
+          host = host.replace(":443", "")
+
+          zipdeploy_url = f"https://{host}/api/zipdeploy"
 
           print(f"url={zipdeploy_url}")
           print(f"username={username}")
@@ -79,13 +80,23 @@ jobs:
 
       - name: Deploy package to Kudu zipdeploy
         run: |
-          curl -X POST "${{ steps.kudu.outputs.url }}" \
+          echo "Deploying to ${{ steps.kudu.outputs.url }}"
+          http_code=$(curl -X POST "${{ steps.kudu.outputs.url }}" \
             -u "${{ steps.kudu.outputs.username }}:${{ steps.kudu.outputs.password }}" \
             --data-binary @"function-package.zip" \
             -H "Content-Type: application/zip" \
-            --fail \
+            --silent \
             --show-error \
-            --silent
+            --output kudu-response.txt \
+            --write-out "%{http_code}")
+
+          echo "Kudu HTTP status: $http_code"
+          echo "Kudu response:"
+          cat kudu-response.txt || true
+
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            exit 1
+          fi
 
       - name: Deployment done
         run: echo "Deployed to mex-intern-pipeline-func-dev"
