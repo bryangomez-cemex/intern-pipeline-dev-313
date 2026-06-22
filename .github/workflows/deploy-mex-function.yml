@@ -71,18 +71,23 @@ jobs:
           host = parsed.netloc or parsed.path.split("/")[0]
           host = host.replace(":443", "")
 
-          zipdeploy_url = f"https://{host}/api/zipdeploy"
-
-          print(f"url={zipdeploy_url}")
+          print(f"url=https://{host}/api/zipdeploy")
           print(f"username={username}")
           print(f"password={password}")
           PY
 
       - name: Deploy package to Kudu zipdeploy
+        env:
+          KUDU_URL: ${{ steps.kudu.outputs.url }}
+          KUDU_USER: ${{ steps.kudu.outputs.username }}
+          KUDU_PASS: ${{ steps.kudu.outputs.password }}
         run: |
-          echo "Deploying to ${{ steps.kudu.outputs.url }}"
-          http_code=$(curl -X POST "${{ steps.kudu.outputs.url }}" \
-            -u "${{ steps.kudu.outputs.username }}:${{ steps.kudu.outputs.password }}" \
+          echo "::add-mask::$KUDU_USER"
+          echo "::add-mask::$KUDU_PASS"
+          echo "Deploying to $KUDU_URL"
+
+          http_code=$(curl -X POST "$KUDU_URL" \
+            -u "$KUDU_USER:$KUDU_PASS" \
             --data-binary @"function-package.zip" \
             -H "Content-Type: application/zip" \
             --silent \
