@@ -1,20 +1,15 @@
-name: Deploy Azure Function - Practicantes CEMEX
+name: Deploy Azure Function - mex-intern-pipeline-func-dev
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
-    paths:
-      - "azure_function_app/**"
-      - "scripts/**"
-      - "requirements.txt"
-      - ".github/workflows/deploy-azure-function.yml"
+  workflow_dispatch:
 
 env:
-  AZURE_FUNCTIONAPP_NAME: intern-pipeline-dev-313
-  PACKAGE_PATH: azure_function_app
+  AZURE_FUNCTIONAPP_NAME: mex-intern-pipeline-func-dev
   PYTHON_VERSION: "3.11"
+  PACKAGE_PATH: azure_function_app
 
 jobs:
   build-and-deploy:
@@ -30,7 +25,7 @@ jobs:
           rsync -av scripts/ azure_function_app/scripts/
           if [ -f requirements.txt ]; then cp requirements.txt azure_function_app/requirements.txt; fi
 
-      - name: Remove files that should not deploy
+      - name: Clean package
         run: |
           find azure_function_app -type d -name "__pycache__" -prune -exec rm -rf {} +
           find azure_function_app -type f -name "*.pyc" -delete
@@ -48,5 +43,5 @@ jobs:
         with:
           app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
           package: ${{ env.PACKAGE_PATH }}
-          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_MEX }}
           scm-do-build-during-deployment: true
