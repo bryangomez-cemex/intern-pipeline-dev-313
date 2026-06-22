@@ -259,7 +259,7 @@ BEGIN
         recipient_group_id NVARCHAR(50) NULL,
         subject_template NVARCHAR(255) NULL,
         body_template NVARCHAR(MAX) NULL,
-        is_active BIT NOT NULL DEFAULT 1,a
+        is_active BIT NOT NULL DEFAULT 1,
         created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
     );
 END;
@@ -294,6 +294,137 @@ BEGIN
         include_reason NVARCHAR(MAX) NULL,
         created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
     );
+END;
+GO
+
+/* Compatibility guards for older MVP schemas.
+   Some early tables used file_id and others source_file_id. The Python pipeline
+   expects file_id for file facts/status/classification and source_file_id for
+   run/missing/hire provenance.
+*/
+IF OBJECT_ID('dbo.fact_intern_document_status', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('dbo.fact_intern_document_status', 'file_id') IS NULL
+        ALTER TABLE dbo.fact_intern_document_status ADD file_id NVARCHAR(50) NULL;
+
+    IF COL_LENGTH('dbo.fact_intern_document_status', 'source_file_id') IS NOT NULL
+        EXEC('UPDATE dbo.fact_intern_document_status SET file_id = COALESCE(file_id, source_file_id) WHERE file_id IS NULL');
+END;
+GO
+
+IF OBJECT_ID('dbo.fact_intern_lifecycle_events', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('dbo.fact_intern_lifecycle_events', 'file_id') IS NULL
+        ALTER TABLE dbo.fact_intern_lifecycle_events ADD file_id NVARCHAR(50) NULL;
+
+    IF COL_LENGTH('dbo.fact_intern_lifecycle_events', 'source_file_id') IS NOT NULL
+        EXEC('UPDATE dbo.fact_intern_lifecycle_events SET file_id = COALESCE(file_id, source_file_id) WHERE file_id IS NULL');
+END;
+GO
+
+IF OBJECT_ID('dbo.fact_file_classification', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('dbo.fact_file_classification', 'file_id') IS NULL
+        ALTER TABLE dbo.fact_file_classification ADD file_id NVARCHAR(50) NULL;
+
+    IF COL_LENGTH('dbo.fact_file_classification', 'source_file_id') IS NOT NULL
+        EXEC('UPDATE dbo.fact_file_classification SET file_id = COALESCE(file_id, source_file_id) WHERE file_id IS NULL');
+END;
+GO
+
+IF OBJECT_ID('dbo.fact_detected_columns', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('dbo.fact_detected_columns', 'file_id') IS NULL
+        ALTER TABLE dbo.fact_detected_columns ADD file_id NVARCHAR(50) NULL;
+
+    IF COL_LENGTH('dbo.fact_detected_columns', 'source_file_id') IS NOT NULL
+        EXEC('UPDATE dbo.fact_detected_columns SET file_id = COALESCE(file_id, source_file_id) WHERE file_id IS NULL');
+END;
+GO
+
+IF OBJECT_ID('dbo.fact_communication_package_files', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('dbo.fact_communication_package_files', 'file_id') IS NULL
+        ALTER TABLE dbo.fact_communication_package_files ADD file_id NVARCHAR(50) NULL;
+
+    IF COL_LENGTH('dbo.fact_communication_package_files', 'source_file_id') IS NOT NULL
+        EXEC('UPDATE dbo.fact_communication_package_files SET file_id = COALESCE(file_id, source_file_id) WHERE file_id IS NULL');
+END;
+GO
+
+IF OBJECT_ID('dbo.fact_intern_missing_items', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('dbo.fact_intern_missing_items', 'source_file_id') IS NULL
+        ALTER TABLE dbo.fact_intern_missing_items ADD source_file_id NVARCHAR(50) NULL;
+
+    IF COL_LENGTH('dbo.fact_intern_missing_items', 'file_id') IS NOT NULL
+        EXEC('UPDATE dbo.fact_intern_missing_items SET source_file_id = COALESCE(source_file_id, file_id) WHERE source_file_id IS NULL');
+END;
+GO
+
+IF OBJECT_ID('dbo.fact_hires', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('dbo.fact_hires', 'source_file_id') IS NULL
+        ALTER TABLE dbo.fact_hires ADD source_file_id NVARCHAR(50) NULL;
+
+    IF COL_LENGTH('dbo.fact_hires', 'file_id') IS NOT NULL
+        EXEC('UPDATE dbo.fact_hires SET source_file_id = COALESCE(source_file_id, file_id) WHERE source_file_id IS NULL');
+END;
+GO
+
+IF OBJECT_ID('dbo.fact_pipeline_runs', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('dbo.fact_pipeline_runs', 'source_file_id') IS NULL
+        ALTER TABLE dbo.fact_pipeline_runs ADD source_file_id NVARCHAR(50) NULL;
+
+    IF COL_LENGTH('dbo.fact_pipeline_runs', 'error_report_file_id') IS NULL
+        ALTER TABLE dbo.fact_pipeline_runs ADD error_report_file_id NVARCHAR(50) NULL;
+
+    IF COL_LENGTH('dbo.fact_pipeline_runs', 'communication_id') IS NULL
+        ALTER TABLE dbo.fact_pipeline_runs ADD communication_id NVARCHAR(50) NULL;
+
+    IF COL_LENGTH('dbo.fact_pipeline_runs', 'file_id') IS NOT NULL
+        EXEC('UPDATE dbo.fact_pipeline_runs SET source_file_id = COALESCE(source_file_id, file_id) WHERE source_file_id IS NULL');
+END;
+GO
+
+IF OBJECT_ID('dbo.fact_processed_blobs', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('dbo.fact_processed_blobs', 'source_file_id') IS NULL
+        ALTER TABLE dbo.fact_processed_blobs ADD source_file_id NVARCHAR(50) NULL;
+
+    IF COL_LENGTH('dbo.fact_processed_blobs', 'file_id') IS NOT NULL
+        EXEC('UPDATE dbo.fact_processed_blobs SET source_file_id = COALESCE(source_file_id, file_id) WHERE source_file_id IS NULL');
+END;
+GO
+
+IF OBJECT_ID('dbo.fact_validations', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('dbo.fact_validations', 'intern_id') IS NULL
+        ALTER TABLE dbo.fact_validations ADD intern_id NVARCHAR(50) NULL;
+END;
+GO
+
+IF OBJECT_ID('dbo.fact_communications', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('dbo.fact_communications', 'email_type') IS NULL ALTER TABLE dbo.fact_communications ADD email_type NVARCHAR(100) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'sent_to') IS NULL ALTER TABLE dbo.fact_communications ADD sent_to NVARCHAR(255) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'status') IS NULL ALTER TABLE dbo.fact_communications ADD status NVARCHAR(100) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'file_id') IS NULL ALTER TABLE dbo.fact_communications ADD file_id NVARCHAR(50) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'email_template_id') IS NULL ALTER TABLE dbo.fact_communications ADD email_template_id NVARCHAR(50) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'communication_type') IS NULL ALTER TABLE dbo.fact_communications ADD communication_type NVARCHAR(100) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'recipient_group') IS NULL ALTER TABLE dbo.fact_communications ADD recipient_group NVARCHAR(100) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'recipient_email') IS NULL ALTER TABLE dbo.fact_communications ADD recipient_email NVARCHAR(255) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'subject') IS NULL ALTER TABLE dbo.fact_communications ADD subject NVARCHAR(255) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'body') IS NULL ALTER TABLE dbo.fact_communications ADD body NVARCHAR(MAX) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'communication_status') IS NULL ALTER TABLE dbo.fact_communications ADD communication_status NVARCHAR(100) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'error_message') IS NULL ALTER TABLE dbo.fact_communications ADD error_message NVARCHAR(MAX) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'sent_at') IS NULL ALTER TABLE dbo.fact_communications ADD sent_at DATETIME2 NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'last_attempt_at') IS NULL ALTER TABLE dbo.fact_communications ADD last_attempt_at DATETIME2 NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'provider_message_id') IS NULL ALTER TABLE dbo.fact_communications ADD provider_message_id NVARCHAR(255) NULL;
+    IF COL_LENGTH('dbo.fact_communications', 'send_attempts') IS NULL ALTER TABLE dbo.fact_communications ADD send_attempts INT NOT NULL DEFAULT 0;
+
+    EXEC('UPDATE dbo.fact_communications SET communication_status = COALESCE(communication_status, status) WHERE communication_status IS NULL');
 END;
 GO
 

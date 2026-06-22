@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 
 data/*.xlsx
+data/e2e_readiness/
 data/error_reports/
 data/email_attachments/
 data/email_intake_downloads/

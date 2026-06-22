@@ -1,0 +1,52 @@
+name: Deploy Azure Function - Practicantes CEMEX
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "azure_function_app/**"
+      - "scripts/**"
+      - "requirements.txt"
+      - ".github/workflows/deploy-azure-function.yml"
+
+env:
+  AZURE_FUNCTIONAPP_NAME: intern-pipeline-dev-313
+  PACKAGE_PATH: azure_function_app
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Copy shared scripts into function package
+        run: |
+          mkdir -p azure_function_app/scripts
+          rsync -av scripts/ azure_function_app/scripts/
+          if [ -f requirements.txt ]; then cp requirements.txt azure_function_app/requirements.txt; fi
+
+      - name: Remove files that should not deploy
+        run: |
+          find azure_function_app -type d -name "__pycache__" -prune -exec rm -rf {} +
+          find azure_function_app -type f -name "*.pyc" -delete
+          rm -rf azure_function_app/.venv azure_function_app/data
+
+      - name: Show package root
+        run: |
+          ls -la azure_function_app
+          test -f azure_function_app/function_app.py
+          test -f azure_function_app/host.json
+          test -f azure_function_app/requirements.txt
+
+      - name: Deploy to Azure Functions
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          package: ${{ env.PACKAGE_PATH }}
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+          scm-do-build-during-deployment: true

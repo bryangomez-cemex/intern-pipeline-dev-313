@@ -30,11 +30,20 @@ All paths call `scripts/pipeline_service.py`, which writes Azure SQL records, cr
 
 ## Main Setup
 
-Run this SQL script in Azure Query Editor:
+Run these SQL scripts in Azure Query Editor:
 
 ```text
+scripts/sql/fix_file_id_source_file_id_compatibility.sql
 scripts/sql/create_full_mvp_pipeline.sql
+scripts/sql/add_corporate_column_aliases.sql
+scripts/sql/create_matching_engine_v1.sql
+scripts/sql/create_business_powerbi_views.sql
 ```
+
+Run the compatibility script first when an older dev database already exists. It
+does not drop tables or data; it only adds safe missing columns and recreates
+legacy views such as `vw_pipeline_summary`, `vw_pipeline_files`,
+`vw_validation_errors`, and `vw_communications_status`.
 
 Required local `.env` values:
 
@@ -54,40 +63,76 @@ DEV_EMAIL_OVERRIDE=dev-only@example.com
 
 ## Local Commands
 
+Use the project virtual environment when it exists:
+
+```bash
+source .venv/bin/activate
+```
+
+Install local dependencies:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
 Compile:
 
 ```bash
-python -m py_compile scripts/process_blob_file.py scripts/pipeline_service.py scripts/run_intake_pipeline.py scripts/flexible_file_classifier.py scripts/lifecycle_requirements.py scripts/communication_packager.py scripts/graph_email_client.py scripts/send_prepared_communications.py scripts/send_real_dev_email_smtp.py
+python3 -m py_compile scripts/process_blob_file.py scripts/pipeline_service.py scripts/run_intake_pipeline.py scripts/flexible_file_classifier.py scripts/lifecycle_requirements.py scripts/matching_engine.py scripts/communication_packager.py scripts/graph_email_client.py scripts/send_prepared_communications.py scripts/send_real_dev_email_smtp.py scripts/check_function_readiness.py scripts/smoke_e2e_pipeline.py scripts/deployment_readiness_e2e.py
+```
+
+Safe smoke test, no Blob/SQL writes and no real emails:
+
+```bash
+python3 scripts/smoke_e2e_pipeline.py
+```
+
+Deployment readiness E2E, offline by default with no Blob/SQL writes and no real emails:
+
+```bash
+EMAIL_MODE=simulation python3 scripts/deployment_readiness_e2e.py
+```
+
+Deployment readiness E2E against staging Azure, opt-in fake-data dry run only:
+
+```bash
+EMAIL_MODE=simulation SEND_EMAILS=false EMAIL_DRY_RUN=true python3 scripts/deployment_readiness_e2e.py --live-azure --confirm-live-dry-run TEST
+```
+
+Optional read-only Azure SQL view check:
+
+```bash
+SMOKE_CHECK_SQL_VIEWS=1 python3 scripts/smoke_e2e_pipeline.py
 ```
 
 Local folder intake:
 
 ```bash
-python scripts/run_intake_pipeline.py local
+python3 scripts/run_intake_pipeline.py local
 ```
 
 Gmail dev intake:
 
 ```bash
-python scripts/run_intake_pipeline.py gmail
+python3 scripts/run_intake_pipeline.py gmail
 ```
 
 Manual processing:
 
 ```bash
-python scripts/process_blob_file.py
+python3 scripts/process_blob_file.py
 ```
 
 Email simulation:
 
 ```bash
-python scripts/send_prepared_communications.py
+python3 scripts/send_prepared_communications.py
 ```
 
 Real dev SMTP email, still redirected only to `DEV_EMAIL_OVERRIDE`:
 
 ```bash
-python scripts/send_real_dev_email_smtp.py
+python3 scripts/send_real_dev_email_smtp.py
 ```
 
 ## Azure Function
@@ -108,20 +153,16 @@ func start
 
 Upload a fake test file to `raw-uploads` and verify Azure SQL rows in the Power BI views.
 
-## Power BI Views
+## Power BI Business Views
 
 Load these Azure SQL views:
 
-- `vw_full_mvp_pipeline_summary`
-- `vw_full_mvp_file_classification`
-- `vw_full_mvp_detected_columns`
+- `vw_interns_current`
+- `vw_full_mvp_interns_current`
+- `vw_full_mvp_document_status`
 - `vw_full_mvp_missing_items`
 - `vw_full_mvp_lifecycle_events`
-- `vw_full_mvp_document_status`
-- `vw_full_mvp_communication_packages`
-- `vw_full_mvp_package_files`
-- `vw_full_mvp_interns_current`
-- `vw_full_mvp_validation_errors`
-- `vw_full_mvp_pipeline_runs`
-# intern-pipeline-dev-313
-# intern-pipeline-dev-313
+- `vw_business_validation_exceptions`
+- `vw_requisitions_status`
+- `vw_communications_status`
+- `vw_hr_actions_today`

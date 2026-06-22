@@ -12,6 +12,7 @@ MODULES_TO_COPY = [
     "communication_packager.py",
     "flexible_file_classifier.py",
     "lifecycle_requirements.py",
+    "matching_engine.py",
     "pipeline_service.py",
 ]
 

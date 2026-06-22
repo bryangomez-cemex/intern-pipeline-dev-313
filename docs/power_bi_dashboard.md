@@ -1,39 +1,55 @@
 # Power BI Dashboard
 
-Connect Power BI to Azure SQL and load the full MVP views.
+Power BI users are HR managers and VPs. Load the business views below; avoid technical file/run/blob views unless auditing a pipeline issue.
 
-## Views
+Run this SQL first:
 
-- `vw_full_mvp_pipeline_summary`
-- `vw_full_mvp_file_classification`
-- `vw_full_mvp_detected_columns`
+```text
+scripts/sql/create_business_powerbi_views.sql
+```
+
+## Business Views
+
+- `vw_interns_current`
+- `vw_full_mvp_interns_current`
+- `vw_full_mvp_document_status`
 - `vw_full_mvp_missing_items`
 - `vw_full_mvp_lifecycle_events`
-- `vw_full_mvp_document_status`
-- `vw_full_mvp_communication_packages`
-- `vw_full_mvp_package_files`
-- `vw_full_mvp_interns_current`
-- `vw_full_mvp_validation_errors`
-- `vw_full_mvp_pipeline_runs`
+- `vw_business_validation_exceptions`
+- `vw_requisitions_status`
+- `vw_communications_status`
+- `vw_hr_actions_today`
 
 ## Recommended Visuals
 
-- Pipeline runs by status, run type, and date.
-- Files by detected profile, confidence, and needs-review flag.
-- Detected source columns mapped to canonical fields.
-- Missing items by process type, severity, status, and missing code.
-- Current interns by VP, area, university, status, company, OI, and CC.
-- Upcoming expirations from `vw_full_mvp_interns_current`.
-- Inactive/baja counts from current intern status and lifecycle events.
-- Document status by document type and intern.
-- Validation errors by file, rule, severity, and process.
-- Communication packages by recipient group and status.
+- Active/current interns by VP, area, manager, university, career, OI, and CC.
+- Missing documents by VP, area, manager, intern, and document code.
+- Upcoming expirations using `is_expiring_soon` and `days_until_contract_end`.
+- Lifecycle events by process type: altas, extendimientos, bajas, current sync, document refresh.
+- Business exceptions by VP, area, manager, OI, CC, company, field, severity, and next action.
+- Pending requisitions by VP, area, manager, status, OI, and CC.
+- Communications/actions needed by recipient group and communication status.
+- HR action queue from `vw_hr_actions_today`.
+
+## Business Questions
+
+- How many active interns do we have?
+- Who is missing documents?
+- Who is expiring soon?
+- Which requisitions are pending?
+- Which interns have OI/CC/manager/company/date/salary issues?
+- Which VP or area has the most blocked cases?
+- What actions does HR need to take today?
 
 ## Verification Queries
 
 ```sql
-SELECT TOP 25 * FROM dbo.vw_full_mvp_pipeline_runs ORDER BY started_at DESC;
-SELECT TOP 25 * FROM dbo.vw_full_mvp_file_classification ORDER BY created_at DESC;
+SELECT TOP 25 * FROM dbo.vw_interns_current ORDER BY intern_name;
 SELECT TOP 25 * FROM dbo.vw_full_mvp_missing_items ORDER BY created_at DESC;
-SELECT TOP 25 * FROM dbo.vw_full_mvp_communication_packages ORDER BY created_at DESC;
+SELECT TOP 25 * FROM dbo.vw_full_mvp_document_status ORDER BY intern_name, document_code;
+SELECT TOP 25 * FROM dbo.vw_full_mvp_lifecycle_events ORDER BY event_date DESC;
+SELECT TOP 25 * FROM dbo.vw_business_validation_exceptions ORDER BY created_at DESC;
+SELECT TOP 25 * FROM dbo.vw_requisitions_status ORDER BY created_at DESC;
+SELECT TOP 25 * FROM dbo.vw_communications_status ORDER BY created_at DESC;
+SELECT TOP 25 * FROM dbo.vw_hr_actions_today ORDER BY action_created_at DESC;
 ```

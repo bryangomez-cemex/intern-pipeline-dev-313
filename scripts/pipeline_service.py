@@ -1094,6 +1094,10 @@ def validate_intern_row(row):
     nombre_completo = clean_value(row.get("NombreCompleto"))
     oi_hc = clean_value(row.get("OI HC"))
     cc_hc = clean_value(row.get("CC HC"))
+    manager = clean_value(row.get("JefeInmediato"))
+    company = clean_value(row.get("CIA HC")) or clean_value(row.get("RazonSocial")) or clean_value(row.get("RAZON SOCIAL HC"))
+    vp_hc = clean_value(row.get("VP HC"))
+    salary = clean_value(row.get("SalarioMensual"))
     universidad = clean_value(row.get("Universidad"))
     estatus = clean_value(row.get("Estatus"))
 
@@ -1123,6 +1127,48 @@ def validate_intern_row(row):
             "Missing CC HC",
             "Add the correct cost center."
         ))
+
+    if not manager:
+        errors.append((
+            "VR011",
+            "JefeInmediato",
+            "Missing manager",
+            "Add the intern manager or jefe inmediato."
+        ))
+
+    if not company:
+        errors.append((
+            "VR012",
+            "CIA HC",
+            "Missing company",
+            "Add the intern company/compania."
+        ))
+
+    if not vp_hc:
+        errors.append((
+            "VR013",
+            "VP HC",
+            "Missing VP",
+            "Add the VP responsible for the intern."
+        ))
+
+    if salary is not None:
+        try:
+            salary_value = float(salary)
+            if salary_value < 0 or salary_value > 100000:
+                errors.append((
+                    "VR014",
+                    "SalarioMensual",
+                    "Salary is outside the expected fake-data range",
+                    "Review the monthly salary amount."
+                ))
+        except (TypeError, ValueError):
+            errors.append((
+                "VR014",
+                "SalarioMensual",
+                "Salary is not numeric",
+                "Use a numeric monthly salary amount."
+            ))
 
     if fecha_ingreso and fecha_vence and fecha_ingreso > fecha_vence:
         errors.append((
@@ -1400,6 +1446,79 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
     )
 
     return intern_id
+
+
+def table_has_columns(cursor, table_name, column_names):
+    placeholders = ", ".join("?" for _ in column_names)
+
+    cursor.execute(
+        f"""
+        SELECT COLUMN_NAME
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = 'dbo'
+          AND TABLE_NAME = ?
+          AND COLUMN_NAME IN ({placeholders})
+        """,
+        table_name,
+        *column_names,
+    )
+
+    existing_columns = {row[0] for row in cursor.fetchall()}
+    return set(column_names).issubset(existing_columns)
+
+
+def insert_fact_hire_if_available(cursor, intern_id, file_id, process_type_id, row_number, row):
+    required_columns = [
+        "hire_id",
+        "intern_id",
+        "source_file_id",
+        "process_type_id",
+        "source_row_number",
+        "hire_status",
+        "onboarding_status",
+        "accepted_at",
+        "start_date",
+        "created_at",
+    ]
+
+    try:
+        if not table_has_columns(cursor, "fact_hires", required_columns):
+            return None
+
+        hire_id = "HIRE-" + str(uuid.uuid4())[:8]
+        start_date = clean_date(row.get("FechadeIngreso"))
+
+        cursor.execute(
+            """
+            INSERT INTO fact_hires (
+                hire_id,
+                intern_id,
+                source_file_id,
+                process_type_id,
+                source_row_number,
+                hire_status,
+                onboarding_status,
+                accepted_at,
+                start_date,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, SYSUTCDATETIME(), ?, SYSUTCDATETIME())
+            """,
+            hire_id,
+            intern_id,
+            file_id,
+            process_type_id,
+            row_number,
+            "Accepted",
+            "Pending Documents",
+            start_date,
+        )
+
+        return hire_id
+    except Exception as hire_error:
+        print("Could not insert fact_hires row; continuing pipeline.")
+        print(hire_error)
+        return None
 
 
 def is_current_intern_profile(classification):
@@ -1685,6 +1804,34 @@ def process_lifecycle_row(cursor, row, classification, run_id, file_id, row_numb
 
     insert_or_update_intern(cursor, row)
 
+    if process_type_id in {"PROC_NEW_HIRE", "PROC_ALTA", "new_hire"}:
+        hire_id = insert_fact_hire_if_available(
+            cursor=cursor,
+            intern_id=intern_id,
+            file_id=file_id,
+            process_type_id=process_type_id,
+            row_number=row_number,
+            row=row,
+        )
+
+        insert_lifecycle_event(
+            cursor=cursor,
+            run_id=run_id,
+            file_id=file_id,
+            intern_id=intern_id,
+            process_type_id=process_type_id,
+            event_type="new_hire_accepted",
+            event_status="Accepted",
+            source_row_number=row_number,
+            old_status=None,
+            new_status=clean_value(row.get("Estatus")) or "Accepted",
+            message=(
+                "Accepted hire row inserted/updated in dim_interns."
+                + (f" fact_hires={hire_id}." if hire_id else "")
+            ),
+            needs_review=0
+        )
+
     return intern_id, [], True
 
 
@@ -1850,6 +1997,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
         missing_items_count = 0
         processed_intern_ids = set()
         document_requirement_checks_enabled = False
+        document_missing_items_affect_validation = True
         report_file_name = None
         df = None
         sheet_names = []
@@ -2158,7 +2306,8 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                         not use_flexible_columns
                         and classification.get("file_profile_id") == "accepted_hires_excel"
                     )
-                    document_requirement_checks_enabled = not legacy_template_mode
+                    document_requirement_checks_enabled = True
+                    document_missing_items_affect_validation = not legacy_template_mode
 
                     if use_flexible_columns:
                         print("Excel does not match the legacy template exactly.")
@@ -2273,7 +2422,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                                     result="Failed",
                                     error_message=f"Row {row_number}: {message}",
                                     suggested_fix=suggested_fix,
-                                    intern_id=None,
+                                    intern_id=intern_id,
                                 )
 
                                 error_rows.append({
@@ -2441,7 +2590,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                                 result="Failed",
                                 error_message=f"Row {row_number}: {message}",
                                 suggested_fix=suggested_fix,
-                                intern_id=None,
+                                intern_id=intern_id,
                             )
 
                             error_rows.append({
@@ -2556,8 +2705,6 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                     )
 
                     for missing_document in missing_documents:
-                        missing_items_count += 1
-
                         lifecycle_requirements.log_missing_item(
                             cursor=cursor,
                             intern_id=processed_intern_id,
@@ -2569,14 +2716,17 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                             source_file_id=file_id
                         )
 
-                        append_missing_item_error(
-                            error_rows=error_rows,
-                            file_id=file_id,
-                            file_name=file_name,
-                            row_number=None,
-                            intern_id=processed_intern_id,
-                            missing_item=missing_document
-                        )
+                        if document_missing_items_affect_validation:
+                            missing_items_count += 1
+
+                            append_missing_item_error(
+                                error_rows=error_rows,
+                                file_id=file_id,
+                                file_name=file_name,
+                                row_number=None,
+                                intern_id=processed_intern_id,
+                                missing_item=missing_document
+                            )
 
                 if missing_items_count > 0:
                     update_file_status(

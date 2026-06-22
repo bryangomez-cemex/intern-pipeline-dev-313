@@ -20,8 +20,10 @@ REQUIRED_FILES = [
     FUNCTION_SCRIPTS_DIR / "azure_clients.py",
     FUNCTION_SCRIPTS_DIR / "flexible_file_classifier.py",
     FUNCTION_SCRIPTS_DIR / "lifecycle_requirements.py",
+    FUNCTION_SCRIPTS_DIR / "matching_engine.py",
     FUNCTION_SCRIPTS_DIR / "communication_packager.py",
     REPO_ROOT / "requirements.txt",
+    ROOT_SCRIPTS_DIR / "deployment_readiness_e2e.py",
 ]
 
 REQUIRED_ENV_VARS = [
@@ -67,19 +69,29 @@ def check_imports():
         "azure_clients",
         "flexible_file_classifier",
         "lifecycle_requirements",
+        "matching_engine",
         "communication_packager",
     ]
 
-    for module_name in modules:
-        importlib.import_module(module_name)
-        print(f"Import {module_name}: OK")
+    try:
+        for module_name in modules:
+            importlib.import_module(module_name)
+            print(f"Import {module_name}: OK")
 
-    pipeline_service = importlib.import_module("pipeline_service")
+        pipeline_service = importlib.import_module("pipeline_service")
 
-    for function_name in REQUIRED_PIPELINE_FUNCTIONS:
-        if not hasattr(pipeline_service, function_name):
-            raise AttributeError(f"pipeline_service missing {function_name}")
-        print(f"pipeline_service.{function_name}: OK")
+        for function_name in REQUIRED_PIPELINE_FUNCTIONS:
+            if not hasattr(pipeline_service, function_name):
+                raise AttributeError(f"pipeline_service missing {function_name}")
+            print(f"pipeline_service.{function_name}: OK")
+    except ModuleNotFoundError as exc:
+        missing_name = exc.name or "unknown"
+        print(f"Import check failed. Missing dependency/module: {missing_name}")
+        print("Install local dependencies with:")
+        print("python3 -m pip install -r requirements.txt")
+        print("For Azure Function local tests, also use:")
+        print("python3 -m pip install -r azure_function_app/requirements.txt")
+        return False
 
     return True
 

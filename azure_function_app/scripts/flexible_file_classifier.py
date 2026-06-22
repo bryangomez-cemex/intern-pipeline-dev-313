@@ -7,10 +7,10 @@ ALLOWED_EXTENSIONS = {"pdf", "xlsx", "csv", "png", "jpg", "jpeg"}
 
 CANONICAL_FIELD_ALIASES = {
     "intern_id": ["InternID", "Intern ID"],
-    "employee_number": ["NumEmpleado", "Numero Empleado", "Employee Number"],
+    "employee_number": ["NumEmpleado", "Numero Empleado", "Employee Number", "NUMERO"],
     "cemex_employee_number": ["NumEmpleadoCemex", "Numero Empleado Cemex", "CEMEX Employee Number"],
-    "email": ["Email", "Correo", "Correo Practicante", "E-mail"],
-    "full_name": ["NombreCompleto", "Nombre Completo", "Full Name", "Name"],
+    "email": ["Email", "Correo", "Correo Practicante", "E-mail", "EMAIL"],
+    "full_name": ["NombreCompleto", "Nombre Completo", "Full Name", "Name", "NOMBRE"],
     "first_name": ["Nombre", "First Name"],
     "paternal_last_name": ["Paterno", "Apellido Paterno"],
     "maternal_last_name": ["Materno", "Apellido Materno"],
@@ -20,18 +20,29 @@ CANONICAL_FIELD_ALIASES = {
     "university": ["Universidad", "University"],
     "career": ["Carrera", "Career", "Major"],
     "semester": ["Semestre", "Semester"],
-    "area": ["Area", "Área"],
-    "position": ["Puesto", "Position"],
+    "area": ["Area", "Área", "REGIONAREA", "GERENCIA"],
+    "position": ["Puesto", "Position", "DESCRIPCIONPUESTO"],
+    "position_code": ["CODPOS"],
+    "job_code": ["CVEPTO"],
+    "location": ["UBICACION", "UBICACIÓN HC"],
+    "location_state": ["EDOUBICACION", "ESTADO UBICACIÓN HC"],
     "start_date": ["FechadeIngreso", "Fecha de Ingreso", "Start Date", "Fecha Inicio"],
     "end_date": ["FechaContratoVence", "Fecha Fin", "End Date", "Vencimiento"],
     "status": ["Estatus", "Status"],
-    "oi_hc": ["OI HC", "OI", "Orden Interna", "Internal Order"],
-    "cc_hc": ["CC HC", "CC", "Centro de Costo", "Cost Center"],
-    "vp_hc": ["VP HC", "VP", "Vicepresidencia"],
+    "oi_hc": ["OI HC", "OI", "Orden Interna", "Internal Order", "ORDENINTERNA"],
+    "cc_hc": ["CC HC", "CC", "Centro de Costo", "Cost Center", "CC", "CCOPERATIVO"],
+    "vp_hc": ["VP HC", "VP", "Vicepresidencia", "VICEPRESIDENCIA"],
     "region_rh": ["RegionRH", "Region RH", "HR Region"],
-    "manager": ["JefeInmediato", "Jefe Inmediato", "Manager", "Supervisor", "Jefe"],
-    "company": ["CIA HC", "RazonSocial", "RAZON SOCIAL HC", "Company", "Compania", "Compañía"],
-    "salary": ["SalarioMensual", "Salary", "Sueldo", "Salario"],
+    "manager": ["JefeInmediato", "Jefe Inmediato", "Manager", "Supervisor", "Jefe", "GERENCIANOMBRE", "GERENTENOMBRE", "NOMBREJEFE"],
+    "manager_number": ["NUMEROJEFE"],
+    "manager_code": ["CODJEFE"],
+    "personnel_lead": ["JEFEDEPERSONAL", "ASESOR RRHH HC"],
+    "company": ["CIA HC", "RazonSocial", "RAZON SOCIAL HC", "Company", "Compania", "Compañía", "CIASTR"],
+    "company_code": ["CIA"],
+    "salary": ["SalarioMensual", "Salary", "Sueldo", "Salario", "Importe", "ImporteTotal"],
+    "payment_frequency": ["FrecuenciaPago"],
+    "user_id": ["USERID"],
+    "sap_user_id": ["USERIDSAP"],
     "gender": ["Sexo", "Gender"],
     "age": ["Edad", "Age"],
 }
@@ -47,13 +58,22 @@ CANONICAL_TO_LEGACY_COLUMNS = {
     "maternal_last_name": "Materno",
     "full_name": "NombreCompleto",
     "position": "Puesto",
+    "position_code": "Puesto",
+    "job_code": "Puesto",
     "manager": "JefeInmediato",
+    "manager_number": "JefeInmediato",
+    "manager_code": "JefeInmediato",
+    "personnel_lead": "JefeInmediato",
     "salary": "SalarioMensual",
     "cc_hc": "CC HC",
     "vp_hc": "VP HC",
     "region_rh": "RegionRH",
     "oi_hc": "OI HC",
     "company": "CIA HC",
+    "company_code": "CIA HC",
+    "location": "UBICACIÓN HC",
+    "location_state": "ESTADO UBICACIÓN HC",
+    "payment_frequency": "FrecuenciaPago",
     "area": "Area",
     "university": "Universidad",
     "career": "Carrera",
@@ -92,6 +112,33 @@ for canonical_field, aliases in CANONICAL_FIELD_ALIASES.items():
     for alias in aliases:
         ALIAS_LOOKUP[normalize_header(alias)] = canonical_field
 
+EXACT_ALIAS_LOOKUP = {
+    "NUMERO": "employee_number",
+    "NOMBRE": "full_name",
+    "CODPOS": "position_code",
+    "CVEPTO": "job_code",
+    "DESCRIPCIONPUESTO": "position",
+    "VICEPRESIDENCIA": "vp_hc",
+    "REGIONAREA": "area",
+    "GERENCIA": "area",
+    "GERENCIANOMBRE": "manager",
+    "GERENTENOMBRE": "manager",
+    "UBICACION": "location",
+    "EDOUBICACION": "location_state",
+    "JEFEDEPERSONAL": "personnel_lead",
+    "NUMEROJEFE": "manager_number",
+    "NOMBREJEFE": "manager",
+    "CODJEFE": "manager_code",
+    "CIA": "company_code",
+    "CIASTR": "company",
+    "CC": "cc_hc",
+    "ORDENINTERNA": "oi_hc",
+    "CCOPERATIVO": "cc_hc",
+    "EMAIL": "email",
+    "USERID": "user_id",
+    "USERIDSAP": "sap_user_id",
+}
+
 
 def read_tabular_file(local_path, extension):
     sheet_names = []
@@ -120,7 +167,7 @@ def map_dataframe_columns(df):
     for index, column in enumerate(df.columns, start=1):
         source_column_name = str(column).strip()
         normalized_column_name = normalize_header(source_column_name)
-        canonical_field_name = ALIAS_LOOKUP.get(normalized_column_name)
+        canonical_field_name = EXACT_ALIAS_LOOKUP.get(source_column_name) or ALIAS_LOOKUP.get(normalized_column_name)
 
         mapped_columns.append({
             "sheet_name": None,
@@ -199,6 +246,49 @@ def detect_file_profile(file_name, extension, sheet_names=None, columns=None):
     return "generic_excel" if extension == "xlsx" else "generic_csv"
 
 
+def is_update_file_name(file_name, sheet_names=None):
+    text = f"{file_name or ''} {' '.join(sheet_names or [])}".lower()
+
+    return any(token in text for token in [
+        "last_update",
+        "last update",
+        "db_update",
+        "db update",
+        "database update",
+        "actualizacion",
+        "actualización",
+        "actualiza",
+        "actualizar",
+        "update_practicantes",
+        "update practicantes",
+    ])
+
+
+def business_pipeline_type(file_profile_id, extension, document_type_id, file_name, sheet_names=None):
+    if extension not in ALLOWED_EXTENSIONS:
+        return "invalid_file"
+
+    if file_profile_id == "unknown_file":
+        return "unknown"
+
+    if file_profile_id == "requisition_excel":
+        return "requisition"
+
+    if file_profile_id in {"accepted_hires_excel", "accepted_hires_csv"}:
+        return "new_hire_documents"
+
+    if is_update_file_name(file_name, sheet_names):
+        return "db_update"
+
+    if file_profile_id in {"current_interns_excel", "current_interns_csv"}:
+        return "current_interns"
+
+    if file_profile_id in {"generic_pdf", "generic_image"} and document_type_id != "DOC999":
+        return "new_hire_documents"
+
+    return "unknown"
+
+
 def is_row_processable(file_profile_id):
     return file_profile_id in {
         "requisition_excel",
@@ -233,6 +323,7 @@ def classify_file(file_name, extension, mime_type, df=None, sheet_names=None):
     file_profile_id = detect_file_profile(file_name, extension, sheet_names, columns)
     document_type_id = get_document_type_id(file_name, extension)
     confidence = classification_confidence(file_profile_id, extension, mapped_columns, document_type_id)
+    business_type = business_pipeline_type(file_profile_id, extension, document_type_id, file_name, sheet_names)
 
     profile_process_map = {
         "requisition_excel": "requisition",
@@ -257,13 +348,19 @@ def classify_file(file_name, extension, mime_type, df=None, sheet_names=None):
     else:
         reason = "Document profile detected from extension and filename keywords."
 
+    business_reason = f"Business router category: {business_type}."
+
     return {
+        "technical_profile": file_profile_id,
         "file_profile_id": file_profile_id,
+        "business_pipeline_type": business_type,
         "process_type_id": profile_process_map.get(file_profile_id, "document_refresh"),
         "document_type_id": document_type_id,
         "row_processable": row_processable,
         "needs_review": needs_review,
+        "confidence": confidence,
         "classification_confidence": confidence,
+        "reason": f"{reason} {business_reason}",
         "classification_reason": reason,
         "sheet_names": ", ".join(sheet_names or []),
         "detected_column_count": len(columns),
