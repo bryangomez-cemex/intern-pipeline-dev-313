@@ -1,0 +1,13 @@
+{
+  "scriptFile": "../function_app.py",
+  "entryPoint": "process_raw_upload",
+  "bindings": [
+    {
+      "name": "inputblob",
+      "type": "blobTrigger",
+      "direction": "in",
+      "path": "raw-uploads/{name}",
+      "connection": "AZURE_STORAGE_CONNECTION_STRING"
+    }
+  ]
+}

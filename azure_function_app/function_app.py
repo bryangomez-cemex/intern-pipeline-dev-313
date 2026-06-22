@@ -15,11 +15,6 @@ for path in (str(FUNCTION_SCRIPTS_DIR), str(REPO_SCRIPTS_DIR), str(REPO_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-# Import pipeline_service lazily inside the function so Azure can index the trigger first.
-
-
-app = func.FunctionApp()
-
 
 def should_ignore_blob(name):
     if not name or name.endswith("/"):
@@ -36,11 +31,6 @@ def should_ignore_blob(name):
     return name.startswith(ignored_prefixes)
 
 
-@app.blob_trigger(
-    arg_name="inputblob",
-    path="raw-uploads/{name}",
-    connection="AZURE_STORAGE_CONNECTION_STRING",
-)
 def process_raw_upload(inputblob: func.InputStream):
     blob_name = inputblob.name.split("/", 1)[1] if "/" in inputblob.name else inputblob.name
     source_container = os.getenv("RAW_UPLOADS_CONTAINER", "raw-uploads")
