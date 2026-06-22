@@ -8,39 +8,84 @@ on:
 
 env:
   AZURE_FUNCTIONAPP_NAME: mex-intern-pipeline-func-dev
-  PYTHON_VERSION: "3.11"
   PACKAGE_PATH: azure_function_app
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Copy shared scripts into function package
+      - name: Prepare function package
         run: |
           mkdir -p azure_function_app/scripts
           rsync -av scripts/ azure_function_app/scripts/
           if [ -f requirements.txt ]; then cp requirements.txt azure_function_app/requirements.txt; fi
 
-      - name: Clean package
-        run: |
           find azure_function_app -type d -name "__pycache__" -prune -exec rm -rf {} +
           find azure_function_app -type f -name "*.pyc" -delete
           rm -rf azure_function_app/.venv azure_function_app/data
 
-      - name: Show package root
-        run: |
-          ls -la azure_function_app
           test -f azure_function_app/function_app.py
           test -f azure_function_app/host.json
           test -f azure_function_app/requirements.txt
 
-      - name: Deploy to Azure Functions
-        uses: Azure/functions-action@v1
-        with:
-          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
-          package: ${{ env.PACKAGE_PATH }}
-          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_MEX }}
+      - name: Zip function package
+        run: |
+          cd azure_function_app
+          zip -r ../function-package.zip .
+
+      - name: Extract Kudu credentials
+        id: kudu
+        env:
+          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_MEX }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import xml.etree.ElementTree as ET
+
+          xml = os.environ["PUBLISH_PROFILE"]
+          root = ET.fromstring(xml)
+
+          profiles = root.findall(".//publishProfile")
+          selected = None
+
+          for p in profiles:
+              url = p.attrib.get("publishUrl", "")
+              method = p.attrib.get("publishMethod", "")
+              if ".scm." in url or method.lower() in {"zipdeploy", "msdeploy"}:
+                  selected = p
+                  break
+
+          if selected is None:
+              raise SystemExit("No SCM/Kudu publish profile found")
+
+          publish_url = selected.attrib["publishUrl"]
+          username = selected.attrib["userName"]
+          password = selected.attrib["userPWD"]
+
+          if not publish_url.startswith("http"):
+              publish_url = "https://" + publish_url
+
+          publish_url = publish_url.rstrip("/")
+          zipdeploy_url = publish_url + "/api/zipdeploy"
+
+          print(f"url={zipdeploy_url}")
+          print(f"username={username}")
+          print(f"password={password}")
+          PY
+
+      - name: Deploy package to Kudu zipdeploy
+        run: |
+          curl -X POST "${{ steps.kudu.outputs.url }}" \
+            -u "${{ steps.kudu.outputs.username }}:${{ steps.kudu.outputs.password }}" \
+            --data-binary @"function-package.zip" \
+            -H "Content-Type: application/zip" \
+            --fail \
+            --show-error \
+            --silent
+
+      - name: Deployment done
+        run: echo "Deployed to mex-intern-pipeline-func-dev"
