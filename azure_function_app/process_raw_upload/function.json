@@ -6,7 +6,7 @@
       "name": "inputblob",
       "type": "blobTrigger",
       "direction": "in",
-      "path": "raw-uploads/{name}",
+      "path": "raw-uploads/{*name}",
       "connection": "AZURE_STORAGE_CONNECTION_STRING"
     }
   ]
