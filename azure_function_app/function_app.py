@@ -15,7 +15,7 @@ for path in (str(FUNCTION_SCRIPTS_DIR), str(REPO_SCRIPTS_DIR), str(REPO_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from pipeline_service import process_blob_by_name
+# Import pipeline_service lazily inside the function so Azure can index the trigger first.
 
 
 app = func.FunctionApp()
@@ -52,6 +52,8 @@ def process_raw_upload(inputblob: func.InputStream):
     logging.info("Processing blob trigger for %s/%s", source_container, blob_name)
 
     try:
+        from pipeline_service import process_blob_by_name
+
         result = process_blob_by_name(
             source_container=source_container,
             source_blob_name=blob_name,
