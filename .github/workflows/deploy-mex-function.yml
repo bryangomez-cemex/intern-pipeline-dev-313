@@ -1,4 +1,4 @@
-name: Deploy Azure Function - mex-intern-pipeline-func-dev
+name: Deploy Azure Function - mex-intern-pipeline-func-win
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_FUNCTIONAPP_NAME: mex-intern-pipeline-func-dev
+  AZURE_FUNCTIONAPP_NAME: mex-intern-pipeline-func-win
   PACKAGE_PATH: azure_function_app
 
 jobs:
@@ -40,7 +40,7 @@ jobs:
       - name: Extract Kudu credentials
         id: kudu
         env:
-          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_MEX }}
+          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_WIN }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os
@@ -99,4 +99,4 @@ jobs:
           fi
 
       - name: Deployment done
-        run: echo "Deployed to mex-intern-pipeline-func-dev"
+        run: echo "Deployed to mex-intern-pipeline-func-win"
