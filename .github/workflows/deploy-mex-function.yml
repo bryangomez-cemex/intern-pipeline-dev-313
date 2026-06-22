@@ -32,6 +32,9 @@ jobs:
           test -f azure_function_app/host.json
           test -f azure_function_app/requirements.txt
 
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r azure_function_app/requirements.txt --target azure_function_app/.python_packages/lib/site-packages
+
       - name: Zip function package
         run: |
           cd azure_function_app
