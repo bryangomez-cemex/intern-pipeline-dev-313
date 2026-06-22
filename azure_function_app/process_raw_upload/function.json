@@ -1,6 +1,6 @@
 {
-  "scriptFile": "../function_app.py",
-  "entryPoint": "process_raw_upload",
+  "scriptFile": "__init__.py",
+  "entryPoint": "main",
   "bindings": [
     {
       "name": "inputblob",
