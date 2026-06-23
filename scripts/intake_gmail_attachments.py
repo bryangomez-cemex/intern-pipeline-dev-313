@@ -24,6 +24,14 @@ IMAP_USERNAME = os.getenv("IMAP_USERNAME")
 IMAP_PASSWORD = os.getenv("IMAP_PASSWORD")
 INTAKE_EMAIL_FOLDER = os.getenv("INTAKE_EMAIL_FOLDER", "INBOX")
 
+# SAFETY: only process emails whose subject contains this tag. This keeps the
+# intake from sweeping an entire personal inbox — it only picks up messages the
+# sender deliberately marked for the pipeline. Set to empty to disable (NOT
+# recommended on a shared/personal inbox).
+INTAKE_SUBJECT_TAG = os.getenv("INTAKE_SUBJECT_TAG", "[INTERN]").strip()
+# Hard cap on emails handled per run, as a backstop against a bad search.
+MAX_EMAILS_PER_RUN = int(os.getenv("INTAKE_MAX_EMAILS_PER_RUN", "25"))
+
 ALLOWED_EXTENSIONS = {".pdf", ".xlsx", ".csv", ".png", ".jpg", ".jpeg"}
 
 DOWNLOAD_FOLDER = Path("data/email_intake_downloads")
@@ -124,9 +132,14 @@ def intake_gmail_attachments():
     try:
         mail.select(INTAKE_EMAIL_FOLDER)
 
-        # Only unread messages with attachments-ish content.
-        # MVP-safe: unread only, so we do not repeatedly process the same inbox.
-        status, data = mail.search(None, "UNSEEN")
+        # Only unread messages, and (by default) only those whose subject carries
+        # the pipeline tag — so a busy personal inbox is never swept wholesale.
+        if INTAKE_SUBJECT_TAG:
+            status, data = mail.search(None, "UNSEEN", "SUBJECT", f'"{INTAKE_SUBJECT_TAG}"')
+            scope = f'unread emails with subject containing "{INTAKE_SUBJECT_TAG}"'
+        else:
+            status, data = mail.search(None, "UNSEEN")
+            scope = "unread emails"
 
         if status != "OK":
             print("Could not search inbox.")
@@ -135,10 +148,14 @@ def intake_gmail_attachments():
         email_ids = data[0].split()
 
         if not email_ids:
-            print("No unread emails found.")
+            print(f"No {scope} found.")
             return []
 
-        print(f"Unread emails found: {len(email_ids)}")
+        if len(email_ids) > MAX_EMAILS_PER_RUN:
+            print(f"{len(email_ids)} matched; capping to the {MAX_EMAILS_PER_RUN} most recent this run.")
+            email_ids = email_ids[-MAX_EMAILS_PER_RUN:]
+
+        print(f"Matched {scope}: {len(email_ids)}")
 
         for email_id in email_ids:
             status, msg_data = mail.fetch(email_id, "(RFC822)")

@@ -1,6 +1,8 @@
 import os
 import sys
 import uuid
+import smtplib
+from email.message import EmailMessage
 
 from dotenv import load_dotenv
 
@@ -21,9 +23,38 @@ load_dotenv()
 SQL_SERVER = os.getenv("AZURE_SQL_SERVER")
 SQL_DATABASE = os.getenv("AZURE_SQL_DATABASE")
 
-# Real send is OFF unless BOTH are set: SEND_EMAILS=true and a Graph mode.
+# Real send is OFF unless SEND_EMAILS=true AND EMAIL_PROVIDER selects a real sender.
+# EMAIL_PROVIDER: "simulation" (default) | "smtp" | "graph"
 SEND_EMAILS = os.getenv("SEND_EMAILS", "false").strip().lower() == "true"
 EMAIL_MODE = os.getenv("EMAIL_MODE", "simulation").strip().lower()
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "simulation").strip().lower()
+
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+# Gmail rewrites a mismatched From to the authenticated account, so default to it.
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL") or SMTP_USERNAME
+
+
+def send_via_smtp(recipients, subject, body):
+    if not SMTP_USERNAME or not SMTP_PASSWORD:
+        raise ValueError("SMTP_USERNAME / SMTP_PASSWORD missing from environment.")
+
+    msg = EmailMessage()
+    msg["From"] = SMTP_FROM_EMAIL
+    msg["To"] = ", ".join(recipients)
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+
+    return "SMTP-" + str(uuid.uuid4())[:8]
 
 
 # ============================================================
@@ -154,7 +185,14 @@ def deliver_communication(communication):
     if communication.get("package_summary"):
         body = communication["package_summary"].get("summary_text") or body
 
-    if SEND_EMAILS and EMAIL_MODE in {"graph_send", "graph_draft"} and graph_email_client.is_graph_configured():
+    if SEND_EMAILS and EMAIL_PROVIDER == "smtp":
+        if not recipients:
+            raise ValueError("Communication has no recipient email address.")
+        provider_message_id = send_via_smtp(recipients, subject, body)
+        print(f"SMTP email sent to {recipients}")
+        return provider_message_id, "Sent"
+
+    if SEND_EMAILS and EMAIL_PROVIDER == "graph" and graph_email_client.is_graph_configured():
         if not recipients:
             raise ValueError("Communication has no recipient email address.")
 
