@@ -2422,7 +2422,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                                     result="Failed",
                                     error_message=f"Row {row_number}: {message}",
                                     suggested_fix=suggested_fix,
-                                    intern_id=intern_id,
+                                    intern_id=None,
                                 )
 
                                 error_rows.append({
@@ -2590,7 +2590,9 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                                 result="Failed",
                                 error_message=f"Row {row_number}: {message}",
                                 suggested_fix=suggested_fix,
-                                intern_id=intern_id,
+                                # intern_id omitted: intern was never written to dim_interns
+                                # so passing it here would violate FK_fact_validations_intern
+                                intern_id=None,
                             )
 
                             error_rows.append({
