@@ -40,6 +40,7 @@ def should_ignore_blob(name):
     arg_name="inputblob",
     path="raw-uploads/{name}",
     connection="AZURE_STORAGE_CONNECTION_STRING",
+    source=func.BlobSource.EVENT_GRID,
 )
 def process_raw_upload(inputblob: func.InputStream):
     # inputblob.name is the full path including the container, e.g.
