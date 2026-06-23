@@ -892,6 +892,46 @@ def insert_communication(
 # COMMUNICATION PREPARATION
 # ============================================================
 
+def resolve_group_recipients(cursor, recipient_group, fallback):
+    """
+    Resolve the active recipient email(s) for a fixed group (HR, Coparmex, ...)
+    from dim_email_recipients, joined by ';'. Falls back to the provided default
+    if the table has no active entry, so the pipeline keeps working safely until
+    the table is populated with real addresses.
+    """
+    try:
+        cursor.execute(
+            """
+            SELECT email
+            FROM dim_email_recipients
+            WHERE recipient_group = ?
+              AND active_flag = 1
+              AND email IS NOT NULL
+            ORDER BY recipient_id
+            """,
+            recipient_group,
+        )
+        emails = [row[0].strip() for row in cursor.fetchall() if row[0] and row[0].strip()]
+        if emails:
+            return ";".join(emails)
+    except Exception as resolve_error:
+        print(f"Recipient resolution failed for group {recipient_group}; using fallback. {resolve_error}")
+
+    return fallback
+
+
+def resolve_applicant_recipient(intern_email=None):
+    """
+    Applicant-facing email. Uses the intern's own email when available, otherwise
+    a single configurable inbox via DEV_EMAIL_OVERRIDE (e.g. an HR intake mailbox),
+    otherwise the safe dev placeholder. Per-applicant routing for batch files is a
+    future enhancement.
+    """
+    if intern_email and str(intern_email).strip():
+        return str(intern_email).strip()
+    return os.getenv("DEV_EMAIL_OVERRIDE") or "dev.intern@example.com"
+
+
 def prepare_correction_communication(
     cursor,
     source_file_id,
@@ -917,7 +957,7 @@ def prepare_correction_communication(
         email_template_id="ET005",
         communication_type="Correction Needed",
         recipient_group="Intern / Applicant",
-        recipient_email="dev.intern@example.com",
+        recipient_email=resolve_applicant_recipient(),
         subject=subject,
         body=body,
         status="Prepared",
@@ -948,7 +988,7 @@ def prepare_hr_package_communication(
         email_template_id="ET002",
         communication_type="HR Complete Package",
         recipient_group="HR",
-        recipient_email="dev.hr@example.com",
+        recipient_email=resolve_group_recipients(cursor, "HR", "dev.hr@example.com"),
         subject=subject,
         body=body,
         status="Prepared",
@@ -977,7 +1017,7 @@ def prepare_coparmex_package_communication(
         email_template_id="ET003",
         communication_type="Coparmex Package",
         recipient_group="Coparmex",
-        recipient_email="dev.coparmex@example.com",
+        recipient_email=resolve_group_recipients(cursor, "Coparmex", "dev.coparmex@example.com"),
         subject=subject,
         body=body,
         status="Prepared",
@@ -1008,7 +1048,7 @@ def prepare_intern_confirmation_communication(
         email_template_id="ET004",
         communication_type="Intern Confirmation",
         recipient_group="Intern / Applicant",
-        recipient_email="dev.intern@example.com",
+        recipient_email=resolve_applicant_recipient(),
         subject=subject,
         body=body,
         status="Prepared",

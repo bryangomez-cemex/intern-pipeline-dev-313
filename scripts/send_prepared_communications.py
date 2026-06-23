@@ -1,11 +1,15 @@
 import os
-import struct
+import sys
 import uuid
-from datetime import datetime, UTC
 
-import pyodbc
 from dotenv import load_dotenv
-from azure.identity import InteractiveBrowserCredential
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+import azure_clients
+import graph_email_client
 
 
 # ============================================================
@@ -17,33 +21,17 @@ load_dotenv()
 SQL_SERVER = os.getenv("AZURE_SQL_SERVER")
 SQL_DATABASE = os.getenv("AZURE_SQL_DATABASE")
 
+# Real send is OFF unless BOTH are set: SEND_EMAILS=true and a Graph mode.
+SEND_EMAILS = os.getenv("SEND_EMAILS", "false").strip().lower() == "true"
+EMAIL_MODE = os.getenv("EMAIL_MODE", "simulation").strip().lower()
+
 
 # ============================================================
-# SQL CONNECTION USING MICROSOFT ENTRA TOKEN
+# SQL CONNECTION (shared auth: managed identity / token / connection string)
 # ============================================================
 
 def get_sql_connection():
-    credential = InteractiveBrowserCredential()
-    token = credential.get_token("https://database.windows.net/.default").token
-
-    token_bytes = token.encode("utf-16-le")
-    token_struct = struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
-
-    SQL_COPT_SS_ACCESS_TOKEN = 1256
-
-    connection_string = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER=tcp:{SQL_SERVER},1433;"
-        f"DATABASE={SQL_DATABASE};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=60;"
-    )
-
-    return pyodbc.connect(
-        connection_string,
-        attrs_before={SQL_COPT_SS_ACCESS_TOKEN: token_struct}
-    )
+    return azure_clients.get_sql_connection()
 
 
 # ============================================================
@@ -107,13 +95,13 @@ def fetch_package_summary(cursor, communication_id):
     }
 
 
-def mark_communication_as_sent_simulated(cursor, communication_id, provider_message_id):
+def mark_communication_as_sent(cursor, communication_id, provider_message_id, status_label):
     cursor.execute(
         """
         UPDATE fact_communications
         SET
-            status = 'Sent - Dev Simulated',
-            communication_status = 'Sent - Dev Simulated',
+            status = ?,
+            communication_status = ?,
             sent_at = SYSUTCDATETIME(),
             last_attempt_at = SYSUTCDATETIME(),
             provider_message_id = ?,
@@ -121,6 +109,8 @@ def mark_communication_as_sent_simulated(cursor, communication_id, provider_mess
             error_message = NULL
         WHERE communication_id = ?
         """,
+        status_label,
+        status_label,
         provider_message_id,
         communication_id,
     )
@@ -141,6 +131,45 @@ def mark_communication_as_failed(cursor, communication_id, error_message):
         error_message,
         communication_id,
     )
+
+
+def build_recipient_list(communication):
+    raw = communication.get("recipient_email") or communication.get("sent_to") or ""
+    return [address.strip() for address in str(raw).split(";") if address.strip()]
+
+
+def deliver_communication(communication):
+    """
+    Dispatch a prepared communication.
+
+    Real email is only sent when SEND_EMAILS=true AND EMAIL_MODE=graph_send AND
+    Microsoft Graph is fully configured. In every other case this safely simulates
+    and records the row as 'Sent - Dev Simulated' — nothing leaves the system.
+    Returns (provider_message_id, status_label).
+    """
+    recipients = build_recipient_list(communication)
+
+    subject = communication.get("subject") or ""
+    body = communication.get("body") or ""
+    if communication.get("package_summary"):
+        body = communication["package_summary"].get("summary_text") or body
+
+    if SEND_EMAILS and EMAIL_MODE in {"graph_send", "graph_draft"} and graph_email_client.is_graph_configured():
+        if not recipients:
+            raise ValueError("Communication has no recipient email address.")
+
+        result = graph_email_client.send_graph_email(to=recipients, subject=subject, body=body)
+
+        if result.get("status") == "sent":
+            print(f"Graph email sent to {recipients}")
+            return "GRAPH-" + str(uuid.uuid4())[:8], "Sent"
+
+        # Graph self-gated (e.g. mode=graph_draft) — do not claim a real send.
+        print(f"Graph send not performed (mode={result.get('mode')}); recording as simulated.")
+        return generate_dev_message_id(), "Sent - Dev Simulated"
+
+    simulate_send_email(communication)
+    return generate_dev_message_id(), "Sent - Dev Simulated"
 
 
 def simulate_send_email(communication):
@@ -205,16 +234,17 @@ def send_prepared_communications():
                     print("Package metadata not available; using legacy communication body.")
                     print(package_error)
 
-                provider_message_id = simulate_send_email(communication)
+                provider_message_id, status_label = deliver_communication(communication)
 
-                mark_communication_as_sent_simulated(
+                mark_communication_as_sent(
                     cursor=cursor,
                     communication_id=communication_id,
-                    provider_message_id=provider_message_id
+                    provider_message_id=provider_message_id,
+                    status_label=status_label,
                 )
 
                 sent_count += 1
-                print(f"Marked as sent simulation: {communication_id}")
+                print(f"Marked as {status_label}: {communication_id}")
 
             except Exception as e:
                 failed_count += 1

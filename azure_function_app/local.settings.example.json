@@ -11,6 +11,12 @@
     "AZURE_SQL_DATABASE": "intern_system_dev",
     "AZURE_SQL_AUTH_MODE": "managed_identity",
     "EMAIL_MODE": "simulation",
-    "DEV_EMAIL_OVERRIDE": "dev-only@example.com"
+    "SEND_EMAILS": "false",
+    "EMAIL_DRY_RUN": "true",
+    "DEV_EMAIL_OVERRIDE": "dev-only@example.com",
+    "GRAPH_TENANT_ID": "<cemex-entra-tenant-id>",
+    "GRAPH_CLIENT_ID": "<app-registration-client-id>",
+    "GRAPH_CLIENT_SECRET": "<app-registration-client-secret>",
+    "GRAPH_SENDER_USER": "intern-pipeline@cemex.com"
   }
 }
