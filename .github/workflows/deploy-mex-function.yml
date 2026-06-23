@@ -37,8 +37,13 @@ jobs:
           test -f azure_function_app/host.json
           test -f azure_function_app/requirements.txt
 
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -r azure_function_app/requirements.txt --target azure_function_app/.python_packages/lib/site-packages
+          # Build dependencies INSIDE the official Azure Functions Python base image
+          # so native wheels (cryptography, pyodbc, pandas) match the runtime host's
+          # glibc. Building on the Ubuntu runner produced a cryptography wheel that
+          # required GLIBC_2.33, which the Functions host lacks, breaking azure-identity.
+          docker run --rm -v "$PWD/azure_function_app":/pkg -w /pkg \
+            mcr.microsoft.com/azure-functions/python:4-python3.11 \
+            bash -c "python -m pip install --upgrade pip && python -m pip install -r requirements.txt --target .python_packages/lib/site-packages"
 
       - name: Zip function package
         run: |
