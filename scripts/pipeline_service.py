@@ -3146,7 +3146,7 @@ def _try_onboarding_route(source_container, source_blob_name, run_type):
 
     try:
         kind = onboarding_pipeline.classify_document(local_path, source_blob_name)
-        if kind not in ("requisicion", "alta_candidate"):
+        if kind not in ("requisicion", "alta_candidate", "hr_new_hires"):
             return None  # not an onboarding file — use the normal pipeline
 
         try:

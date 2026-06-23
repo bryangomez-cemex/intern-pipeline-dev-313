@@ -105,6 +105,8 @@ def classify_document(local_path, filename):
             blob = ""
         if "datos del practicante" in blob or "administracion de practicantes" in blob or "curp" in blob and "beneficiarios" in blob:
             return "alta_candidate"
+        if "numero de puesto" in blob or "personal email" in blob or "cemex id" in blob or "cemex-id" in blob:
+            return "hr_new_hires"
         if "numempleado" in blob or "nombrecompleto" in blob:
             return "intern_data"
         return "other"
@@ -347,7 +349,101 @@ def process_onboarding_file(local_path, filename, meta=None):
         return process_requisicion(local_path, meta)
     if kind == "alta_candidate":
         return process_candidate(local_path, meta)
+    if kind == "hr_new_hires":
+        return process_hr_new_hires(local_path, meta)
     return {"type": kind, "status": "skipped_not_onboarding"}
+
+
+# ============================================================
+# HR new-hires list → match to candidate + complete the data
+# ============================================================
+
+HR_COLUMN_MAP = {
+    "nombre": "nombre_completo", "nombre completo": "nombre_completo",
+    "personal email": "email_personal", "correo personal": "email_personal", "email personal": "email_personal",
+    "numero de puesto": "requisition_id", "id requisicion": "requisition_id", "posicion": "requisition_id",
+    "cemex id": "cemex_id", "cemexid": "cemex_id",
+    "correo institucional": "correo_institucional", "correo institucional cemex": "correo_institucional",
+    "email cemex": "correo_institucional", "correo cemex": "correo_institucional",
+    "ubicacion udn": "ubicacion_udn", "udn": "ubicacion_udn",
+    "compania": "compania", "cia hc": "compania", "razon social": "compania", "razon social hc": "compania",
+    "ubicacion estado": "ubicacion_estado", "ubicacion estado de practicante": "ubicacion_estado",
+    "oi": "oi", "oi hc": "oi", "orden interna": "oi",
+    "cc": "cc", "cc hc": "cc", "centro de costo": "cc",
+    "carrera": "carrera", "universidad": "universidad", "semestre": "semestre",
+    "fecha de graduacion": "fecha_graduacion", "graduacion": "fecha_graduacion",
+}
+
+HR_PERSIST_FIELDS = ["cemex_id", "correo_institucional", "ubicacion_udn", "compania",
+                     "ubicacion_estado", "oi", "cc", "fecha_graduacion"]
+
+
+def _map_hr_row(row, headers):
+    out = {}
+    for header, value in zip(headers, row):
+        field = HR_COLUMN_MAP.get(_norm(header))
+        if field and _clean(value) is not None:
+            out[field] = _clean(value)
+    return out
+
+
+def _match_candidate(cur, hr_row):
+    """Match an HR row to an existing candidate: by Position ID if present,
+    otherwise by personal email, otherwise by full name."""
+    req = hr_row.get("requisition_id")
+    email = hr_row.get("email_personal")
+    name = hr_row.get("nombre_completo")
+    if req:
+        cur.execute("SELECT TOP 1 intern_id FROM dim_interns WHERE requisition_id = ?", req)
+        r = cur.fetchone()
+        if r:
+            return r[0], f"matched by Position ID {req}"
+    if email:
+        cur.execute("SELECT TOP 1 intern_id FROM dim_interns WHERE LOWER(email_personal) = LOWER(?)", email)
+        r = cur.fetchone()
+        if r:
+            return r[0], f"matched by email {email}"
+    if name:
+        cur.execute("SELECT TOP 1 intern_id FROM dim_interns WHERE LOWER(nombre_completo) = LOWER(?)", name)
+        r = cur.fetchone()
+        if r:
+            return r[0], f"matched by name {name}"
+    return None, "no candidate matched"
+
+
+def process_hr_new_hires(local_path, meta=None):
+    df = pd.read_excel(local_path, header=0)
+    headers = list(df.columns)
+    conn = azure_clients.get_sql_connection()
+    cur = conn.cursor()
+    matched, unmatched, finalized = [], [], []
+    try:
+        for _, raw in df.iterrows():
+            hr_row = _map_hr_row(raw.tolist(), headers)
+            if not any(hr_row.get(k) for k in ("requisition_id", "email_personal", "nombre_completo")):
+                continue
+            intern_id, how = _match_candidate(cur, hr_row)
+            if not intern_id:
+                unmatched.append(hr_row.get("nombre_completo") or hr_row.get("email_personal"))
+                continue
+            sets, vals = [], []
+            for f in HR_PERSIST_FIELDS:
+                if hr_row.get(f) is not None:
+                    sets.append(f"[{f}] = ?"); vals.append(hr_row[f])
+            sets.append("[hr_list_matched] = 1")
+            cur.execute(f"UPDATE dim_interns SET {', '.join(sets)} WHERE intern_id = ?", *vals, intern_id)
+            conn.commit()
+            matched.append({"intern_id": intern_id, "how": how})
+            print(f"HR new-hire {how} → {intern_id}; completing data")
+        for m in matched:
+            finalized.append(finalize_onboarding(m["intern_id"]))
+        result = {"type": "hr_new_hires", "status": "processed",
+                  "matched": len(matched), "unmatched": unmatched,
+                  "finalized": [f.get("status") for f in finalized]}
+        print(f"HR NEW-HIRES → matched={len(matched)} unmatched={len(unmatched)}")
+        return result
+    finally:
+        cur.close(); conn.close()
 
 
 # ============================================================
@@ -435,7 +531,9 @@ def finalize_onboarding(intern_id, hr_data=None):
     try:
         cur.execute(
             "SELECT intern_id, nombre, nombre_completo, email_personal, carrera, semestre, "
-            "universidad, fecha_nacimiento, requisition_id FROM dim_interns WHERE intern_id = ?",
+            "universidad, fecha_nacimiento, fecha_graduacion, requisition_id, "
+            "cemex_id, correo_institucional, ubicacion_udn, compania, ubicacion_estado, oi, cc "
+            "FROM dim_interns WHERE intern_id = ?",
             intern_id,
         )
         row = cur.fetchone()
@@ -443,6 +541,15 @@ def finalize_onboarding(intern_id, hr_data=None):
             return {"status": "not_found", "intern_id": intern_id}
         cols = [d[0] for d in cur.description]
         candidate = dict(zip(cols, row))
+
+        # HR-sourced fields come from the candidate row (persisted by the HR-list
+        # ingestion); an explicit hr_data arg overrides when provided.
+        persisted_hr = {f: candidate.get(f) for f in
+                        ("cemex_id", "correo_institucional", "ubicacion_udn", "compania",
+                         "ubicacion_estado", "oi", "cc")}
+        if hr_data:
+            persisted_hr.update({k: v for k, v in hr_data.items() if v})
+        hr_data = persisted_hr
 
         requisicion = None
         req_id = candidate.get("requisition_id")
