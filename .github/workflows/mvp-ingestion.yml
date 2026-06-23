@@ -10,6 +10,14 @@ on:
   schedule:
     - cron: "*/5 * * * *"
 
+# Never run two ingestion jobs at once. If a scheduled run is still in flight
+# when the next one fires, the new run waits instead of racing it for the same
+# blobs (which caused BlobNotFound failures when two runs archived/deleted the
+# same file). cancel-in-progress is false so an in-flight run finishes cleanly.
+concurrency:
+  group: mvp-blob-ingestion
+  cancel-in-progress: false
+
 jobs:
   ingest:
     runs-on: ubuntu-latest
