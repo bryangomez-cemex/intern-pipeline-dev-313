@@ -184,3 +184,26 @@ These map to `dim_interns` (extended) and a new `fact_intern_beneficiaries` chil
 3. **Lifecycle emails (B, D, F).** Welcome 1 (request + alta attach), Welcome 2
    (forward HR's convenio/póliza/acuerdo), final HR+Coparmex notification.
 4. **Signed-docs round (stage E)** + status/lifecycle tracking end to end.
+
+## 12. Coparmex package + final notifications (implemented)
+
+After a candidate is processed and the HR new-hires list completes the data,
+`finalize_onboarding(intern_id, hr_data)` runs stage F:
+
+- Builds the Coparmex "FAVOR DE GESTIONAR CONVENIO" package by **merging** sources:
+  candidate alta (nombre, fecha nac, correo personal, universidad, carrera, semestre,
+  graduación), requisición (VP, nombre del proyecto, jefe directo, AIRH, fecha
+  ingreso/fin), HR new-hires list (CEMEX-ID, correo institucional, ubicación UDN,
+  compañía, ubicación estado), OI/CC from lookup tables keyed by jefe directo, and a
+  fixed Sueldo = $8800. The filled `NA FORMATO ... COPARMEX.xlsx` is attached.
+- **Conditional send:** if any HR-sourced field (CEMEX-ID, correo institucional,
+  ubicación UDN, compañía, ubicación estado, OI, CC) is missing → do NOT send Coparmex;
+  instead email RH the exact missing fields and ask them to send the data to the DB
+  (with the Position ID to match). When complete, Coparmex is sent.
+- **Notifications:** practicante always gets a thank-you/next-steps email; on success RH
+  gets "dado de alta exitosamente" pointing to Power BI; on incomplete data RH gets the
+  missing-fields request.
+
+Pending (not yet built): HR new-hires-list ingestion that auto-populates `hr_data`
+and the OI/CC lookup tables (`OI_BY_MANAGER` / `CC_BY_MANAGER`) — currently passed in /
+empty; PDF cross-validation of CURP/constancia/passport.

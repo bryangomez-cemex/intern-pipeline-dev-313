@@ -348,3 +348,152 @@ def process_onboarding_file(local_path, filename, meta=None):
     if kind == "alta_candidate":
         return process_candidate(local_path, meta)
     return {"type": kind, "status": "skipped_not_onboarding"}
+
+
+# ============================================================
+# Coparmex package + final notifications (lifecycle stage F)
+# ============================================================
+
+POWERBI_DASHBOARD_URL = os.getenv("POWERBI_DASHBOARD_URL", "https://app.powerbi.com/<intern-dashboard>")
+FIXED_SUELDO = "$8800"
+
+# OI / CC tables keyed by jefe directo — to be provided. Empty for now → those
+# fields report as missing, which (per the rules) blocks the Coparmex send.
+OI_BY_MANAGER = {}
+CC_BY_MANAGER = {}
+
+# Coparmex needs these, and they come from the HR new-hires list / OI-CC tables.
+# If any is missing, do NOT send Coparmex — notify RH to complete the data instead.
+COPARMEX_REQUIRED_FROM_HR = [
+    "cemex_id", "correo_institucional", "ubicacion_udn", "compania",
+    "ubicacion_estado", "oi", "cc",
+]
+
+
+def _resolve_recipients(cursor):
+    out = {"HR": None, "Coparmex": None}
+    try:
+        cursor.execute(
+            "SELECT recipient_group, email FROM dim_email_recipients "
+            "WHERE active_flag = 1 AND recipient_group IN ('HR','Coparmex')"
+        )
+        for group, email in cursor.fetchall():
+            if email:
+                out[group] = (out[group] + ";" + email) if out[group] else email
+    except Exception as e:
+        print("recipient resolve note:", e)
+    return out
+
+
+def build_coparmex_package(requisicion, candidate, hr_data=None):
+    hr_data = hr_data or {}
+    manager = (requisicion or {}).get("manager_name")
+    fields = {
+        "Nombre completo": candidate.get("nombre_completo"),
+        "Fecha de nacimiento": candidate.get("fecha_nacimiento"),
+        "Correo personal": candidate.get("email_personal"),
+        "Universidad": candidate.get("universidad") or candidate.get("nombre_escuela"),
+        "Carrera": candidate.get("carrera"),
+        "Semestre": candidate.get("semestre"),
+        "Fecha de graduación": candidate.get("fecha_graduacion"),
+        "CEMEX-ID": hr_data.get("cemex_id"),
+        "Correo institucional CEMEX": hr_data.get("correo_institucional"),
+        "Vicepresidencia": (requisicion or {}).get("vp"),
+        "Nombre del proyecto": (requisicion or {}).get("descripcion_proyecto"),
+        "Jefe directo": manager,
+        "AIRH": (requisicion or {}).get("asesor_rh"),
+        "Ubicación UDN": hr_data.get("ubicacion_udn"),
+        "Compañia": hr_data.get("compania"),
+        "OI": hr_data.get("oi") or OI_BY_MANAGER.get(manager),
+        "CC": hr_data.get("cc") or CC_BY_MANAGER.get(manager),
+        "Sueldo": FIXED_SUELDO,
+        "Fecha de ingreso": (requisicion or {}).get("fecha_inicio_solicitada"),
+        "Fecha fin": (requisicion or {}).get("fecha_termino_solicitada"),
+        "Ubicacion Estado de practicante": hr_data.get("ubicacion_estado"),
+    }
+    key_map = {
+        "cemex_id": "CEMEX-ID", "correo_institucional": "Correo institucional CEMEX",
+        "ubicacion_udn": "Ubicación UDN", "compania": "Compañia",
+        "ubicacion_estado": "Ubicacion Estado de practicante", "oi": "OI", "cc": "CC",
+    }
+    missing = [key_map[k] for k in COPARMEX_REQUIRED_FROM_HR if not fields.get(key_map[k])]
+    return fields, missing
+
+
+def _format_coparmex_email(fields):
+    lines = ["Se adjunta la información relacionada.", "", "FAVOR DE GESTIONAR CONVENIO."]
+    for label, value in fields.items():
+        lines.append(f"{label}: {value if value not in (None, '') else ''}")
+    return "\n".join(lines)
+
+
+def finalize_onboarding(intern_id, hr_data=None):
+    """Stage F: after the candidate (and HR new-hires list) are in, either send the
+    Coparmex package or — if HR-sourced fields are still missing — notify RH instead."""
+    conn = azure_clients.get_sql_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT intern_id, nombre, nombre_completo, email_personal, carrera, semestre, "
+            "universidad, fecha_nacimiento, requisition_id FROM dim_interns WHERE intern_id = ?",
+            intern_id,
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"status": "not_found", "intern_id": intern_id}
+        cols = [d[0] for d in cur.description]
+        candidate = dict(zip(cols, row))
+
+        requisicion = None
+        req_id = candidate.get("requisition_id")
+        if req_id:
+            cur.execute(
+                "SELECT vp, descripcion_proyecto, manager_name, asesor_rh, "
+                "fecha_inicio_solicitada, fecha_termino_solicitada FROM dim_requisitions WHERE requisition_id = ?",
+                req_id,
+            )
+            r = cur.fetchone()
+            if r:
+                requisicion = dict(zip([d[0] for d in cur.description], r))
+
+        fields, missing = build_coparmex_package(requisicion, candidate, hr_data)
+        recipients = _resolve_recipients(cur)
+        name = candidate.get("nombre") or candidate.get("nombre_completo") or "practicante"
+
+        # Always thank the practicante.
+        send_email(candidate.get("email_personal") or "candidate",
+                   "Gracias – Summer Internship Program",
+                   f"Hola {name}, muchas gracias. Recibimos y procesamos tu información. "
+                   "Nos pondremos en contacto contigo muy pronto con los siguientes pasos.")
+
+        if missing:
+            # Data incomplete → do NOT send Coparmex; ask RH to complete it.
+            send_email(recipients["HR"] or "hr",
+                       f"Practicante procesado – faltan datos para Coparmex ({candidate.get('nombre_completo')})",
+                       f"El expediente de {candidate.get('nombre_completo')} se procesó correctamente, pero la "
+                       f"base de datos no pudo encontrar/hacer match de: {', '.join(missing)}.\n\n"
+                       f"Por ello NO se envió el correo a Coparmex. Por favor envíen estos datos a la base de "
+                       f"datos (incluyendo el número de puesto {req_id or '(sin posición)'} para hacer match). "
+                       f"Una vez completos, se enviarán los datos a Coparmex.\n\n"
+                       f"Datos disponibles en Power BI: {POWERBI_DASHBOARD_URL}")
+            result = {"status": "rh_notified_missing", "intern_id": intern_id,
+                      "requisition_id": req_id, "missing": missing, "coparmex_sent": False}
+        else:
+            # Complete → send Coparmex (attach the alta) + notify RH of success.
+            send_email(recipients["Coparmex"] or "coparmex",
+                       f"FAVOR DE GESTIONAR CONVENIO – {candidate.get('nombre_completo')}",
+                       _format_coparmex_email(fields) +
+                       "\n\n(Se adjunta NA FORMATO PARA ALTA DE PRACTICANTE COPARMEX.xlsx)")
+            send_email(recipients["HR"] or "hr",
+                       "Practicante dado de alta exitosamente",
+                       f"El practicante {candidate.get('nombre_completo')} (posición {req_id}) fue dado de alta "
+                       f"exitosamente y el paquete fue enviado a Coparmex.\n\n"
+                       f"Para acceder a los datos, visita Power BI: {POWERBI_DASHBOARD_URL}")
+            result = {"status": "coparmex_sent", "intern_id": intern_id,
+                      "requisition_id": req_id, "coparmex_sent": True}
+
+        conn.commit()
+        print(f"FINALIZE {intern_id}: {result['status']}" + (f" missing={missing}" if missing else ""))
+        return result
+    finally:
+        cur.close(); conn.close()
