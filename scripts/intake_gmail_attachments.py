@@ -32,7 +32,7 @@ INTAKE_SUBJECT_TAG = os.getenv("INTAKE_SUBJECT_TAG", "[INTERN]").strip()
 # Hard cap on emails handled per run, as a backstop against a bad search.
 MAX_EMAILS_PER_RUN = int(os.getenv("INTAKE_MAX_EMAILS_PER_RUN", "25"))
 
-ALLOWED_EXTENSIONS = {".pdf", ".xlsx", ".csv", ".png", ".jpg", ".jpeg"}
+ALLOWED_EXTENSIONS = {".pdf", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".docx"}
 
 DOWNLOAD_FOLDER = Path("data/email_intake_downloads")
 
@@ -88,7 +88,7 @@ def build_blob_name(filename, email_uid):
     return f"email_intake/{timestamp}_uid_{email_uid}_{clean_name}"
 
 
-def upload_file_to_blob(local_path, blob_name):
+def upload_file_to_blob(local_path, blob_name, metadata=None):
     blob_service_client = get_blob_service_client()
     container_client = blob_service_client.get_container_client(RAW_UPLOADS_CONTAINER)
 
@@ -96,10 +96,22 @@ def upload_file_to_blob(local_path, blob_name):
         container_client.upload_blob(
             name=blob_name,
             data=file_data,
-            overwrite=True
+            overwrite=True,
+            metadata=metadata or {},
         )
 
     return blob_name
+
+
+def parse_sender_and_reqid(sender_header, subject):
+    """Extract a clean sender email and any REQ-YYYY-#### tag from the subject."""
+    import re
+    from email.utils import parseaddr
+
+    sender_email = parseaddr(sender_header or "")[1] or (sender_header or "")
+    match = re.search(r"REQ-\d{4}-\d{3,}", subject or "", re.IGNORECASE)
+    requisition_id = match.group(0).upper() if match else ""
+    return sender_email, requisition_id
 
 
 def connect_imap():
@@ -209,7 +221,12 @@ def intake_gmail_attachments():
                     email_uid=email_id.decode()
                 )
 
-                upload_file_to_blob(local_path, blob_name)
+                sender_email, requisition_id = parse_sender_and_reqid(sender, subject)
+                upload_file_to_blob(local_path, blob_name, metadata={
+                    "sender_email": sender_email,
+                    "email_subject": (subject or "")[:200],
+                    "requisition_id": requisition_id,
+                })
                 uploaded_blobs.append(blob_name)
 
                 print(f"Uploaded attachment: {filename}")

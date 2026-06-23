@@ -3116,7 +3116,75 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
         log_conn.close()
 
 
+def _try_onboarding_route(source_container, source_blob_name, run_type):
+    """If the blob is a requisición (.docx) or a candidate alta (.xlsx), process it
+    through the onboarding pipeline and archive it. Returns a result dict when it
+    handled the file, or None so the caller falls back to the intern-data pipeline.
+    Centralized here so BOTH the Function App (Event Grid) and the cron route the
+    same way."""
+    import os as _os
+    import tempfile as _tempfile
+
+    ext = _os.path.splitext(source_blob_name or "")[1].lower()
+    if ext not in (".docx", ".xlsx"):
+        return None
+
+    try:
+        import onboarding_pipeline
+
+        blob_client = get_blob_service_client().get_blob_client(
+            container=source_container, blob=source_blob_name
+        )
+        metadata = (blob_client.get_blob_properties().metadata) or {}
+
+        with _tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp.write(blob_client.download_blob().readall())
+            local_path = tmp.name
+    except Exception as setup_error:
+        print(f"Onboarding pre-check skipped ({source_blob_name}): {setup_error}")
+        return None
+
+    try:
+        kind = onboarding_pipeline.classify_document(local_path, source_blob_name)
+        if kind not in ("requisicion", "alta_candidate"):
+            return None  # not an onboarding file — use the normal pipeline
+
+        try:
+            result = onboarding_pipeline.process_onboarding_file(
+                local_path,
+                source_blob_name,
+                meta={
+                    "sender_email": metadata.get("sender_email"),
+                    "requisition_id": metadata.get("requisition_id") or None,
+                    "source_container": source_container,
+                    "source_blob": source_blob_name,
+                },
+            )
+            try:
+                archive_processed_blob(source_container, source_blob_name, success=True)
+            except Exception as archive_error:
+                print(f"Onboarding archive note: {archive_error}")
+            return result
+        except Exception as processing_error:
+            print(f"Onboarding processing failed for {source_blob_name}: {processing_error}")
+            return {
+                "type": "onboarding",
+                "status": "error",
+                "source_blob_name": source_blob_name,
+                "error": str(processing_error),
+            }
+    finally:
+        try:
+            _os.unlink(local_path)
+        except OSError:
+            pass
+
+
 def process_blob_by_name(source_container, source_blob_name, run_type="manual"):
+    routed = _try_onboarding_route(source_container, source_blob_name, run_type)
+    if routed is not None:
+        return routed
+
     return _process_blob(
         source_container_name=source_container,
         source_blob_name=source_blob_name,

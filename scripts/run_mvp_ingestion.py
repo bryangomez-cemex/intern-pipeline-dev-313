@@ -5,13 +5,16 @@ from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.blob import BlobServiceClient
 
 sys.path.insert(0, os.path.join(os.getcwd(), "scripts"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from pipeline_service import process_blob_by_name
 
 CONTAINER = os.getenv("RAW_UPLOADS_CONTAINER", "raw-uploads")
 PREFIX = os.getenv("MVP_PREFIX", "")
 
-ALLOWED_EXTENSIONS = (".xlsx", ".csv", ".pdf", ".png", ".jpg", ".jpeg")
+# Onboarding files (requisición .docx, candidate alta .xlsx) and intern data all
+# flow through process_blob_by_name, which routes onboarding files internally.
+ALLOWED_EXTENSIONS = (".xlsx", ".csv", ".pdf", ".png", ".jpg", ".jpeg", ".docx")
 SKIP_PREFIXES = ("archive/", "processed/", "failed/", "error-reports/")
 
 
@@ -51,9 +54,6 @@ def main():
             print(f"OK: {result}")
             processed += 1
         except ResourceNotFoundError:
-            # The blob was deleted between listing and processing — typically a
-            # concurrent run that already archived it, or an external delete.
-            # This is benign: skip it rather than counting a hard failure.
             print(f"SKIPPED (blob no longer exists): {name}")
             skipped_missing += 1
         except Exception as e:
@@ -66,10 +66,6 @@ def main():
     print(f"Skipped (missing): {skipped_missing}")
     print(f"Failed: {failed}")
 
-    # Validation failures are EXPECTED and are written to SQL as success.
-    # A real infrastructure failure (bad connection string, SQL unreachable,
-    # driver missing) should fail the CI job so it is visible. A blob that
-    # merely failed business validation must NOT fail the job.
     if failed > 0:
         raise SystemExit(f"{failed} blob(s) hit an unexpected processing error.")
 
