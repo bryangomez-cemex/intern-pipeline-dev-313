@@ -16,6 +16,11 @@ for path in (str(FUNCTION_SCRIPTS_DIR), str(REPO_SCRIPTS_DIR), str(REPO_ROOT)):
         sys.path.insert(0, path)
 
 
+# v2 programming model: a single FunctionApp instance that the worker indexes.
+# Requires the app setting AzureWebJobsFeatureFlags=EnableWorkerIndexing.
+app = func.FunctionApp()
+
+
 def should_ignore_blob(name):
     if not name or name.endswith("/"):
         return True
@@ -31,7 +36,14 @@ def should_ignore_blob(name):
     return name.startswith(ignored_prefixes)
 
 
+@app.blob_trigger(
+    arg_name="inputblob",
+    path="raw-uploads/{name}",
+    connection="AZURE_STORAGE_CONNECTION_STRING",
+)
 def process_raw_upload(inputblob: func.InputStream):
+    # inputblob.name is the full path including the container, e.g.
+    # "raw-uploads/unknown/2026/06/22/file.csv" — strip the container segment.
     blob_name = inputblob.name.split("/", 1)[1] if "/" in inputblob.name else inputblob.name
     source_container = os.getenv("RAW_UPLOADS_CONTAINER", "raw-uploads")
 

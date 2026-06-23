@@ -15,3 +15,4 @@ intake_files_processed/
 intake_files_failed/
 
 azure_function_app/local.settings.json
+azure_function_app/.venv/
