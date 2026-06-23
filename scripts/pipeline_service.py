@@ -1845,11 +1845,15 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
     if not AZURE_STORAGE_CONNECTION_STRING:
         raise ValueError("AZURE_STORAGE_CONNECTION_STRING is missing from .env")
 
-    if not SQL_SERVER:
-        raise ValueError("AZURE_SQL_SERVER is missing from .env")
+    # A full AZURE_SQL_CONNECTION_STRING (used by GitHub Actions) is self-sufficient
+    # and does not require the discrete server/database vars. Only require those when
+    # no connection string is provided (e.g. local Entra-token auth).
+    if not os.getenv("AZURE_SQL_CONNECTION_STRING"):
+        if not SQL_SERVER:
+            raise ValueError("AZURE_SQL_SERVER is missing from .env")
 
-    if not SQL_DATABASE:
-        raise ValueError("AZURE_SQL_DATABASE is missing from .env")
+        if not SQL_DATABASE:
+            raise ValueError("AZURE_SQL_DATABASE is missing from .env")
 
     run_id = generate_run_id()
     log_conn = get_sql_connection()
