@@ -368,6 +368,7 @@ HR_COLUMN_MAP = {
     "ubicacion udn": "ubicacion_udn", "udn": "ubicacion_udn",
     "compania": "compania", "cia hc": "compania", "razon social": "compania", "razon social hc": "compania",
     "ubicacion estado": "ubicacion_estado", "ubicacion estado de practicante": "ubicacion_estado",
+    "ubicacion edo": "ubicacion_estado", "edo": "ubicacion_estado",
     "oi": "oi", "oi hc": "oi", "orden interna": "oi",
     "cc": "cc", "cc hc": "cc", "centro de costo": "cc",
     "carrera": "carrera", "universidad": "universidad", "semestre": "semestre",
@@ -381,7 +382,8 @@ HR_PERSIST_FIELDS = ["cemex_id", "correo_institucional", "ubicacion_udn", "compa
 def _map_hr_row(row, headers):
     out = {}
     for header, value in zip(headers, row):
-        field = HR_COLUMN_MAP.get(_norm(header))
+        norm = re.sub(r"\s+", " ", _norm(header).replace("-", " ").replace("/", " ")).strip()
+        field = HR_COLUMN_MAP.get(norm)
         if field and _clean(value) is not None:
             out[field] = _clean(value)
     return out
@@ -409,6 +411,66 @@ def _match_candidate(cur, hr_row):
         if r:
             return r[0], f"matched by name {name}"
     return None, "no candidate matched"
+
+
+def _name_key(name):
+    """Order-independent signature of a person name so 'APELLIDOS, NOMBRE' and
+    'NOMBRE APELLIDOS' match. Lowercased, de-accented, punctuation removed, sorted."""
+    if not name:
+        return ""
+    text = unicodedata.normalize("NFKD", str(name))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    tokens = re.sub(r"[^a-z0-9 ]", " ", text.lower()).split()
+    return " ".join(sorted(tokens))
+
+
+def load_manager_assignments(local_path):
+    """Load the W1 layout (jefe directo → OI/CC/compañía/UDN/estado/VP/asesor) into
+    dim_manager_assignments, keyed by a normalized jefe-name signature."""
+    df = pd.read_excel(local_path)
+    col = {c: c for c in df.columns}
+    conn = azure_clients.get_sql_connection()
+    conn.autocommit = True
+    cur = conn.cursor()
+    cur.execute("""IF OBJECT_ID('dbo.dim_manager_assignments','U') IS NULL
+        CREATE TABLE dbo.dim_manager_assignments (
+          jefe_key NVARCHAR(300) NOT NULL PRIMARY KEY, jefe_directo NVARCHAR(200) NULL,
+          vp NVARCHAR(200) NULL, asesor_rh NVARCHAR(200) NULL, ubicacion_udn NVARCHAR(200) NULL,
+          estado NVARCHAR(100) NULL, compania NVARCHAR(200) NULL, oi NVARCHAR(50) NULL,
+          cc NVARCHAR(50) NULL, updated_at DATETIME2 DEFAULT SYSUTCDATETIME())""")
+    loaded = 0
+    for _, r in df.iterrows():
+        jefe = _clean(r.get("JefeInmediato"))
+        if not jefe:
+            continue
+        key = _name_key(jefe)
+        vals = (key, jefe, _clean(r.get("VP HC")), _clean(r.get("ASESOR RRHH HC")),
+                _clean(r.get("UBICACIÓN HC")), _clean(r.get("ESTADO UBICACIÓN HC")),
+                _clean(r.get("RAZON SOCIAL HC")), _clean(r.get("OI HC")), _clean(r.get("CC HC")))
+        cur.execute("""MERGE dbo.dim_manager_assignments AS t
+            USING (SELECT ? AS jefe_key) AS s ON t.jefe_key = s.jefe_key
+            WHEN MATCHED THEN UPDATE SET jefe_directo=?, vp=?, asesor_rh=?, ubicacion_udn=?, estado=?, compania=?, oi=?, cc=?, updated_at=SYSUTCDATETIME()
+            WHEN NOT MATCHED THEN INSERT (jefe_key, jefe_directo, vp, asesor_rh, ubicacion_udn, estado, compania, oi, cc)
+            VALUES (?,?,?,?,?,?,?,?,?);""",
+            key, vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7], vals[8],
+            key, vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7], vals[8])
+        loaded += 1
+    conn.close()
+    return loaded
+
+
+def get_manager_assignment(cursor, manager_name):
+    key = _name_key(manager_name)
+    if not key:
+        return {}
+    cursor.execute(
+        "SELECT oi, cc, compania, ubicacion_udn, estado FROM dim_manager_assignments WHERE jefe_key = ?",
+        key,
+    )
+    r = cursor.fetchone()
+    if not r:
+        return {}
+    return {"oi": r[0], "cc": r[1], "compania": r[2], "ubicacion_udn": r[3], "estado_w1": r[4]}
 
 
 def process_hr_new_hires(local_path, meta=None):
@@ -562,6 +624,16 @@ def finalize_onboarding(intern_id, hr_data=None):
             r = cur.fetchone()
             if r:
                 requisicion = dict(zip([d[0] for d in cur.description], r))
+
+        # OI/CC/compañía/UDN come from the W1 layout, keyed by the jefe directo on
+        # the requisición — fill whatever the HR list did not already provide.
+        if requisicion and requisicion.get("manager_name"):
+            w1 = get_manager_assignment(cur, requisicion["manager_name"])
+            for k in ("oi", "cc", "compania", "ubicacion_udn"):
+                if not hr_data.get(k) and w1.get(k):
+                    hr_data[k] = w1[k]
+            if not hr_data.get("ubicacion_estado") and w1.get("estado_w1"):
+                hr_data["ubicacion_estado"] = w1["estado_w1"]
 
         fields, missing = build_coparmex_package(requisicion, candidate, hr_data)
         recipients = _resolve_recipients(cur)
