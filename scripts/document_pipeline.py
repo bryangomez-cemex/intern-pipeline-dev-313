@@ -229,15 +229,16 @@ def process_candidate_document(local_path, filename, meta=None):
         cur.close(); conn.close()
 
 
-def check_candidate_documents_complete(intern_id, sender_email=None):
-    """Completeness + identity check for the candidate's document set. Returns/sends
-    the next outcome: complete → ready for convenio; incomplete/mismatch → return to sender."""
+def check_candidate_documents_complete(intern_id, sender_email=None, notify_incomplete=True):
+    """Pack-1 completeness + identity check. On complete → confirm to the candidate
+    (once). On incomplete → return to sender with the reasons, but only when
+    notify_incomplete=True (so per-document auto-checks during collection stay quiet)."""
     conn = azure_clients.get_sql_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT nombre_completo, email_personal FROM dim_interns WHERE intern_id=?", intern_id)
+        cur.execute("SELECT nombre_completo, email_personal, documents_status FROM dim_interns WHERE intern_id=?", intern_id)
         row = cur.fetchone()
-        cand_name, cand_email = (row[0], row[1]) if row else (None, None)
+        cand_name, cand_email, prev_status = (row[0], row[1], row[2]) if row else (None, None, None)
         cur.execute(
             "SELECT document_type, notes FROM fact_intern_documents "
             "WHERE intern_id=? AND stage='candidate_docs'", intern_id)
@@ -254,15 +255,17 @@ def check_candidate_documents_complete(intern_id, sender_email=None):
         if problems:
             cur.execute("UPDATE dim_interns SET documents_status='incomplete' WHERE intern_id=?", intern_id)
             conn.commit()
-            ob._return_to_sender(sender_email or cand_email, "documentos del practicante", problems)
+            if notify_incomplete:
+                ob._return_to_sender(sender_email or cand_email, "documentos del practicante (pack 1)", problems)
             return {"status": "incomplete", "intern_id": intern_id, "missing": missing, "problems": doc_problems}
 
         cur.execute("UPDATE dim_interns SET documents_status='complete' WHERE intern_id=?", intern_id)
         conn.commit()
-        ob.send_email(cand_email or "candidate",
-                      "Documentos recibidos – Summer Internship Program",
-                      f"Hola, recibimos y validamos tu expediente completo ({', '.join(sorted(received))}). "
-                      "En breve te enviaremos tu convenio y Acuerdo de Confidencialidad para firma.")
+        if prev_status != "complete":  # confirm only on transition
+            ob.send_email(cand_email or "candidate",
+                          "Documentos recibidos – Summer Internship Program",
+                          f"Hola, recibimos y validamos tu expediente completo ({', '.join(sorted(received))}). "
+                          "En breve te enviaremos tu convenio y Acuerdo de Confidencialidad para firma.")
         return {"status": "complete", "intern_id": intern_id, "received": sorted(received)}
     finally:
         cur.close(); conn.close()
@@ -299,9 +302,12 @@ def forward_convenio_to_candidate(intern_id):
     conn = azure_clients.get_sql_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT nombre, email_personal FROM dim_interns WHERE intern_id=?", intern_id)
+        cur.execute("SELECT nombre, email_personal, documents_status FROM dim_interns WHERE intern_id=?", intern_id)
         row = cur.fetchone()
-        name, email = (row[0], row[1]) if row else (None, None)
+        name, email, docs_status = (row[0], row[1], row[2]) if row else (None, None, None)
+        # step 9: only forward pack 2 if pack 1 passed everything
+        if docs_status != "complete":
+            return {"status": "waiting_pack1_complete", "documents_status": docs_status}
         cur.execute(
             "SELECT document_type, file_name, blob_path FROM fact_intern_documents "
             "WHERE intern_id=? AND stage='convenio'", intern_id)
@@ -383,7 +389,7 @@ def process_document(local_path, filename, meta=None):
     if dtype in ("curp", "constancia", "identificacion", "foto", "acta"):
         res = process_candidate_document(local_path, filename, m)
         if intern_id:
-            check_candidate_documents_complete(intern_id, sender_email=sender)
+            check_candidate_documents_complete(intern_id, sender_email=sender, notify_incomplete=False)
         return res
     if dtype in ("convenio", "nda"):
         # candidate returning a signed doc vs HR sending the originals
@@ -426,7 +432,10 @@ def process_signed_doc(local_path, filename, meta=None):
                           "Convenio firmado recibido",
                           f"El practicante {nm[0] if nm else intern_id} devolvió el convenio y el Acuerdo de "
                           f"Confidencialidad firmados. Proceso de documentos completo.")
-            return {"document_id": doc_id, "intern_id": intern_id, "status": "signed_complete", "naming_ok": naming_ok}
+            # step 12: everything complete → Coparmex package + final emails (HR, new hire, Coparmex)
+            final = ob.finalize_onboarding(intern_id)
+            return {"document_id": doc_id, "intern_id": intern_id, "status": "signed_complete",
+                    "naming_ok": naming_ok, "finalize": final.get("status")}
         return {"document_id": doc_id, "intern_id": intern_id, "status": "received", "naming_ok": naming_ok}
     finally:
         cur.close(); conn.close()

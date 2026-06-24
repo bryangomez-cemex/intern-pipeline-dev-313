@@ -279,6 +279,13 @@ def process_requisicion(local_path, meta=None):
         if fields.get("needs_review"):
             _return_to_sender(meta.get("sender_email"), f"requisición ({fields.get('puesto') or 'sin puesto'})",
                               [fields.get("parse_notes") or "faltan campos requeridos."])
+        else:
+            send_email(meta.get("sender_email") or "solicitante",
+                       f"Requisición recibida – ID de posición {req_id}",
+                       f"Tu requisición para '{fields.get('puesto') or ''}' fue procesada correctamente.\n\n"
+                       f"El ID de posición es: {req_id}\n\n"
+                       "Inclúyelo en la lista de new hires (columna 'NUMERO DE PUESTO') o en el asunto del "
+                       "correo (p.ej. [INTERN][" + req_id + "]) para vincular al practicante con esta posición.")
         result = {"type": "requisicion", "status": "needs_review" if fields.get("needs_review") else "created",
                   "requisition_id": req_id, "puesto": fields.get("puesto")}
         print(f"REQUISICIÓN → {req_id} ({result['status']}) puesto={fields.get('puesto')}")
@@ -334,24 +341,59 @@ def process_candidate(local_path, meta=None):
             print(f"CANDIDATE returned to sender: {len(errors)} error(s)")
             return {"type": "candidate", "status": "returned", "errors": errors}
 
-        pra_id = _next_sequential_id(cur, "dim_interns", "intern_id", "PRA")
-        cur.execute(
-            """INSERT INTO dim_interns
-               (intern_id, nombre, paterno, materno, nombre_completo, sexo, curp, carrera, semestre,
-                universidad, email, email_personal, telefono, estado_civil, nacionalidad, matricula, grado,
-                fecha_nacimiento, calle, numero_exterior, colonia, poblacion, estado_direccion, codigo_postal,
-                requisition_id, status_id, candidate_source_blob, candidate_needs_review, candidate_validation_notes)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            pra_id, fields.get("nombre"), fields.get("paterno"), fields.get("materno"),
-            fields.get("nombre_completo"), fields.get("sexo"), (fields.get("curp") or "").upper(),
-            fields.get("carrera"), fields.get("semestre_requerido") or fields.get("grado"),
-            None, fields.get("email_personal"), fields.get("email_personal"), fields.get("telefono"),
-            fields.get("estado_civil"), fields.get("nacionalidad"), fields.get("matricula"), fields.get("grado"),
-            fields.get("fecha_nacimiento"), fields.get("calle"), fields.get("numero_exterior"),
-            fields.get("colonia"), fields.get("poblacion"), fields.get("estado_direccion"),
-            fields.get("codigo_postal"), req_id, "ST002", meta.get("source_blob"),
-            1 if warnings else 0, "; ".join(warnings) if warnings else None,
-        )
+        # Match the candidate the HR list already created (by email / sender / position)
+        # to ENRICH it with the alta; only insert a new row if none exists.
+        existing = None
+        for lookup_email in (fields.get("email_personal"), meta.get("sender_email")):
+            if lookup_email and not existing:
+                cur.execute("SELECT TOP 1 intern_id FROM dim_interns WHERE LOWER(email_personal)=LOWER(?)", lookup_email)
+                rr = cur.fetchone(); existing = rr[0] if rr else None
+        if not existing and req_id:
+            cur.execute("SELECT TOP 1 intern_id FROM dim_interns WHERE requisition_id=? AND (curp IS NULL OR curp='')", req_id)
+            rr = cur.fetchone(); existing = rr[0] if rr else None
+
+        alta_cols = {
+            "nombre": fields.get("nombre"), "paterno": fields.get("paterno"), "materno": fields.get("materno"),
+            "nombre_completo": fields.get("nombre_completo"), "sexo": fields.get("sexo"),
+            "curp": (fields.get("curp") or "").upper() or None, "carrera": fields.get("carrera"),
+            "semestre": fields.get("semestre_requerido") or fields.get("grado"),
+            "email_personal": fields.get("email_personal"), "telefono": fields.get("telefono"),
+            "estado_civil": fields.get("estado_civil"), "nacionalidad": fields.get("nacionalidad"),
+            "matricula": fields.get("matricula"), "grado": fields.get("grado"),
+            "fecha_nacimiento": fields.get("fecha_nacimiento"), "calle": fields.get("calle"),
+            "numero_exterior": fields.get("numero_exterior"), "colonia": fields.get("colonia"),
+            "poblacion": fields.get("poblacion"), "estado_direccion": fields.get("estado_direccion"),
+            "codigo_postal": fields.get("codigo_postal"),
+        }
+        if existing:
+            pra_id = existing
+            sets, vals = [], []
+            for col, val in alta_cols.items():
+                if val is not None:
+                    sets.append(f"[{col}] = COALESCE([{col}], ?)"); vals.append(val)
+            if req_id:
+                sets.append("[requisition_id] = COALESCE([requisition_id], ?)"); vals.append(req_id)
+            sets.append("[candidate_source_blob] = ?"); vals.append(meta.get("source_blob"))
+            cur.execute(f"UPDATE dim_interns SET {', '.join(sets)} WHERE intern_id=?", *vals, pra_id)
+            status = "enriched"
+        else:
+            pra_id = _next_sequential_id(cur, "dim_interns", "intern_id", "PRA")
+            cur.execute(
+                """INSERT INTO dim_interns
+                   (intern_id, nombre, paterno, materno, nombre_completo, sexo, curp, carrera, semestre,
+                    email_personal, telefono, estado_civil, nacionalidad, matricula, grado,
+                    fecha_nacimiento, calle, numero_exterior, colonia, poblacion, estado_direccion, codigo_postal,
+                    requisition_id, status_id, candidate_source_blob, candidate_needs_review, candidate_validation_notes)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                pra_id, *[alta_cols[k] for k in ("nombre","paterno","materno","nombre_completo","sexo","curp","carrera","semestre",
+                          "email_personal","telefono","estado_civil","nacionalidad","matricula","grado","fecha_nacimiento",
+                          "calle","numero_exterior","colonia","poblacion","estado_direccion","codigo_postal")],
+                req_id, "ST002", meta.get("source_blob"),
+                1 if warnings else 0, "; ".join(warnings) if warnings else None,
+            )
+            status = "created"
+
+        cur.execute("DELETE FROM fact_intern_beneficiaries WHERE intern_id=?", pra_id)
         for b in beneficiaries:
             cur.execute(
                 """INSERT INTO fact_intern_beneficiaries
@@ -361,16 +403,23 @@ def process_candidate(local_path, meta=None):
                 b["parentesco"], b["porcentaje"], meta.get("source_blob"),
             )
         apply_email_body_fields(cur, pra_id, meta)
+        # record the alta as a received pack-1 document (for the completeness check)
+        cur.execute(
+            """IF NOT EXISTS (SELECT 1 FROM fact_intern_documents WHERE intern_id=? AND stage='candidate_docs' AND document_type='alta')
+               INSERT INTO fact_intern_documents (document_id, intern_id, stage, document_type, file_name, blob_path, name_match, status)
+               VALUES (?,?, 'candidate_docs','alta',?,?, 1,'received')""",
+            pra_id, "DOC-" + str(uuid.uuid4())[:8], pra_id,
+            os.path.basename(meta.get("source_blob") or "alta.xlsx"), meta.get("source_blob"))
         conn.commit()
-        # confirmation / welcome to the candidate
-        send_email(fields.get("email_personal") or "candidate",
-                   "¡Te damos la bienvenida a Cemex! Documentos – Summer Internship Program",
-                   f"Hola {fields.get('nombre')}, recibimos y validamos tu información correctamente. "
-                   f"Tu registro es {pra_id}" + (f", vinculado a la posición {req_id}." if req_id else ".") +
-                   " En breve te enviaremos tu convenio y documentos para firma.")
-        result = {"type": "candidate", "status": "created", "intern_id": pra_id,
+        try:
+            import document_pipeline
+            document_pipeline.check_candidate_documents_complete(
+                pra_id, sender_email=meta.get("sender_email"), notify_incomplete=False)
+        except Exception as ce:
+            print("pack1 check note:", ce)
+        result = {"type": "candidate", "status": status, "intern_id": pra_id,
                   "requisition_id": req_id, "beneficiaries": len(beneficiaries), "warnings": warnings}
-        print(f"CANDIDATE → {pra_id} linked={req_id} beneficiarios={len(beneficiaries)} warnings={len(warnings)}")
+        print(f"CANDIDATE → {pra_id} ({status}) linked={req_id} beneficiarios={len(beneficiaries)}")
         return result
     finally:
         cur.close(); conn.close()
@@ -506,12 +555,64 @@ def get_manager_assignment(cursor, manager_name):
     return {"oi": r[0], "cc": r[1], "compania": r[2], "ubicacion_udn": r[3], "estado_w1": r[4]}
 
 
+def _get_alta_template():
+    """Download the blank Coparmex alta format (attached to Welcome 1)."""
+    try:
+        import tempfile
+        client = azure_clients.get_blob_service_client().get_blob_client(
+            container="archive", blob="templates/alta_coparmex.xlsx")
+        tmp = tempfile.NamedTemporaryFile(suffix="_alta_coparmex.xlsx", delete=False)
+        tmp.write(client.download_blob().readall()); tmp.close()
+        return tmp.name, True
+    except Exception as e:
+        print(f"alta template not available: {e}")
+        return None, False
+
+
+def _create_candidate_from_hr(cur, hr_row):
+    pra_id = _next_sequential_id(cur, "dim_interns", "intern_id", "PRA")
+    full = hr_row.get("nombre_completo")
+    cur.execute(
+        """INSERT INTO dim_interns (intern_id, nombre, nombre_completo, email_personal,
+           requisition_id, status_id, hr_list_matched)
+           VALUES (?,?,?,?,?, 'ST002', 1)""",
+        pra_id, (full.split()[0] if full else None), full, hr_row.get("email_personal"),
+        hr_row.get("requisition_id"))
+    return pra_id
+
+
+def send_pack1(cur, intern_id):
+    """Welcome 1: ask the new hire for their data + documents, attach the alta format."""
+    cur.execute("SELECT nombre, nombre_completo, email_personal FROM dim_interns WHERE intern_id=?", intern_id)
+    r = cur.fetchone()
+    if not r:
+        return
+    name = r[0] or (r[1].split()[0] if r[1] else "practicante")
+    tmpl, is_temp = _get_alta_template()
+    send_email(r[2] or "candidate",
+               "¡Te damos la bienvenida a Cemex! Trámite Convenio – Summer Internship Program",
+               f"¡Hola {name}! Estamos iniciando tu proceso de ingreso.\n\n"
+               "Por favor RESPONDE a este correo con tus datos:\n"
+               "Nombre completo:\n¿Cómo te gusta que te digan?:\nFecha de nacimiento:\n"
+               "Fecha estimada de graduación:\nTeléfono celular:\nLinkedIn:\n\n"
+               "Y ADJUNTA estos documentos: Acta de nacimiento, Constancia de estudios, "
+               "Identificación oficial, CURP, el formato de alta adjunto (lleno) y una fotografía "
+               "(color, fondo blanco).\n\nIncluye [INTERN] en el asunto del correo.",
+               attachments=[tmpl] if tmpl else None)
+    cur.execute("UPDATE dim_interns SET documents_status = COALESCE(documents_status, 'pack1_requested') WHERE intern_id=?", intern_id)
+    if is_temp and tmpl:
+        try:
+            os.unlink(tmpl)
+        except OSError:
+            pass
+
+
 def process_hr_new_hires(local_path, meta=None):
     df = pd.read_excel(local_path, header=0)
     headers = list(df.columns)
     conn = azure_clients.get_sql_connection()
     cur = conn.cursor()
-    matched, unmatched, finalized = [], [], []
+    processed = []
     try:
         for _, raw in df.iterrows():
             hr_row = _map_hr_row(raw.tolist(), headers)
@@ -519,23 +620,23 @@ def process_hr_new_hires(local_path, meta=None):
                 continue
             intern_id, how = _match_candidate(cur, hr_row)
             if not intern_id:
-                unmatched.append(hr_row.get("nombre_completo") or hr_row.get("email_personal"))
-                continue
+                intern_id = _create_candidate_from_hr(cur, hr_row)
+                how = "created from HR list"
             sets, vals = [], []
             for f in HR_PERSIST_FIELDS:
                 if hr_row.get(f) is not None:
                     sets.append(f"[{f}] = ?"); vals.append(hr_row[f])
+            if hr_row.get("requisition_id"):
+                sets.append("[requisition_id] = COALESCE([requisition_id], ?)"); vals.append(hr_row["requisition_id"])
             sets.append("[hr_list_matched] = 1")
             cur.execute(f"UPDATE dim_interns SET {', '.join(sets)} WHERE intern_id = ?", *vals, intern_id)
+            send_pack1(cur, intern_id)            # step 5: pack 1 to the new hire
             conn.commit()
-            matched.append({"intern_id": intern_id, "how": how})
-            print(f"HR new-hire {how} → {intern_id}; completing data")
-        for m in matched:
-            finalized.append(finalize_onboarding(m["intern_id"]))
+            processed.append({"intern_id": intern_id, "how": how})
+            print(f"HR new-hire {how} → {intern_id}; pack 1 (Welcome 1) sent")
         result = {"type": "hr_new_hires", "status": "processed",
-                  "matched": len(matched), "unmatched": unmatched,
-                  "finalized": [f.get("status") for f in finalized]}
-        print(f"HR NEW-HIRES → matched={len(matched)} unmatched={len(unmatched)}")
+                  "count": len(processed), "interns": processed}
+        print(f"HR NEW-HIRES → {len(processed)} new hire(s), pack 1 sent")
         return result
     finally:
         cur.close(); conn.close()
