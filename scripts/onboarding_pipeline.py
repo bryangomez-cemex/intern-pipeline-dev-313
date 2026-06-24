@@ -205,10 +205,12 @@ def validate_candidate(fields, requisicion=None):
 # email (dev-safe: all mail routed to DEV_EMAIL_OVERRIDE)
 # ============================================================
 
-def send_email(intended_to, subject, body):
+def send_email(intended_to, subject, body, attachments=None):
     target = DEV_EMAIL_OVERRIDE or intended_to
+    attachments = attachments or []
     if not SEND_EMAILS:
-        print(f"[SIMULATED EMAIL] to={intended_to} (routed {target}) subj={subject}")
+        extra = f" + {len(attachments)} attachment(s)" if attachments else ""
+        print(f"[SIMULATED EMAIL] to={intended_to} (routed {target}) subj={subject}{extra}")
         return {"status": "simulated", "to": target}
     msg = EmailMessage()
     msg["From"] = SMTP_FROM_EMAIL
@@ -218,6 +220,14 @@ def send_email(intended_to, subject, body):
         f"DEV TEST — intended recipient: {intended_to}\n"
         f"(routed to {target} for safety)\n\n{body}\n"
     )
+    for path in attachments:
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            msg.add_attachment(data, maintype="application", subtype="octet-stream",
+                               filename=os.path.basename(path))
+        except Exception as att_err:
+            print(f"attachment skipped ({path}): {att_err}")
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
         s.ehlo(); s.starttls(); s.ehlo()
         s.login(SMTP_USERNAME, SMTP_PASSWORD)

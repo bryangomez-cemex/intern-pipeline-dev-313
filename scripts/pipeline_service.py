@@ -3126,11 +3126,12 @@ def _try_onboarding_route(source_container, source_blob_name, run_type):
     import tempfile as _tempfile
 
     ext = _os.path.splitext(source_blob_name or "")[1].lower()
-    if ext not in (".docx", ".xlsx"):
+    if ext not in (".docx", ".xlsx", ".pdf", ".png", ".jpg", ".jpeg"):
         return None
 
     try:
         import onboarding_pipeline
+        import document_pipeline
 
         blob_client = get_blob_service_client().get_blob_client(
             container=source_container, blob=source_blob_name
@@ -3144,35 +3145,39 @@ def _try_onboarding_route(source_container, source_blob_name, run_type):
         print(f"Onboarding pre-check skipped ({source_blob_name}): {setup_error}")
         return None
 
+    meta = {
+        "sender_email": metadata.get("sender_email"),
+        "requisition_id": metadata.get("requisition_id") or None,
+        "source_container": source_container,
+        "source_blob": source_blob_name,
+    }
+
     try:
         kind = onboarding_pipeline.classify_document(local_path, source_blob_name)
-        if kind not in ("requisicion", "alta_candidate", "hr_new_hires"):
-            return None  # not an onboarding file — use the normal pipeline
+
+        if kind in ("requisicion", "alta_candidate", "hr_new_hires"):
+            try:
+                result = onboarding_pipeline.process_onboarding_file(local_path, source_blob_name, meta=meta)
+            except Exception as processing_error:
+                print(f"Onboarding processing failed for {source_blob_name}: {processing_error}")
+                return {"type": "onboarding", "status": "error",
+                        "source_blob_name": source_blob_name, "error": str(processing_error)}
+        else:
+            # documents (candidate package, convenio, signed) — stages C–E
+            try:
+                result = document_pipeline.process_document(local_path, source_blob_name, meta=meta)
+            except Exception as doc_error:
+                print(f"Document processing failed for {source_blob_name}: {doc_error}")
+                return {"type": "document", "status": "error",
+                        "source_blob_name": source_blob_name, "error": str(doc_error)}
+            if result is None:
+                return None  # not an onboarding document — use the normal pipeline
 
         try:
-            result = onboarding_pipeline.process_onboarding_file(
-                local_path,
-                source_blob_name,
-                meta={
-                    "sender_email": metadata.get("sender_email"),
-                    "requisition_id": metadata.get("requisition_id") or None,
-                    "source_container": source_container,
-                    "source_blob": source_blob_name,
-                },
-            )
-            try:
-                archive_processed_blob(source_container, source_blob_name, success=True)
-            except Exception as archive_error:
-                print(f"Onboarding archive note: {archive_error}")
-            return result
-        except Exception as processing_error:
-            print(f"Onboarding processing failed for {source_blob_name}: {processing_error}")
-            return {
-                "type": "onboarding",
-                "status": "error",
-                "source_blob_name": source_blob_name,
-                "error": str(processing_error),
-            }
+            archive_processed_blob(source_container, source_blob_name, success=True)
+        except Exception as archive_error:
+            print(f"Onboarding archive note: {archive_error}")
+        return result
     finally:
         try:
             _os.unlink(local_path)
