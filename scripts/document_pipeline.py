@@ -55,17 +55,58 @@ def _norm(value):
     return text.lower()
 
 
+def ocr_text(local_path):
+    """OCR a scanned PDF or image with Azure AI Document Intelligence (prebuilt-read).
+    Works for any format the service supports; returns the recognized text, or '' if
+    not configured / on error. Cloud call, so it runs in local, CI, and the Function App."""
+    endpoint = os.getenv("DOC_INTEL_ENDPOINT")
+    key = os.getenv("DOC_INTEL_KEY")
+    if not endpoint or not key:
+        return ""
+    try:
+        import time
+        import requests
+        url = endpoint.rstrip("/") + "/formrecognizer/documentModels/prebuilt-read:analyze?api-version=2023-07-31"
+        with open(local_path, "rb") as fh:
+            data = fh.read()
+        resp = requests.post(url, headers={"Ocp-Apim-Subscription-Key": key,
+                                           "Content-Type": "application/octet-stream"},
+                             data=data, timeout=60)
+        if resp.status_code not in (200, 202):
+            print(f"OCR submit failed {resp.status_code}: {resp.text[:160]}")
+            return ""
+        op = resp.headers.get("Operation-Location") or resp.headers.get("operation-location")
+        for _ in range(30):
+            time.sleep(2)
+            g = requests.get(op, headers={"Ocp-Apim-Subscription-Key": key}, timeout=30).json()
+            status = g.get("status")
+            if status == "succeeded":
+                return g.get("analyzeResult", {}).get("content", "") or ""
+            if status == "failed":
+                print(f"OCR failed: {g}")
+                return ""
+    except Exception as e:
+        print(f"OCR error ({local_path}): {e}")
+    return ""
+
+
 def extract_text(local_path, ext):
+    text = ""
     try:
         if ext == ".pdf":
             from pypdf import PdfReader
-            return "\n".join((p.extract_text() or "") for p in PdfReader(local_path).pages)
-        if ext == ".docx":
+            text = "\n".join((p.extract_text() or "") for p in PdfReader(local_path).pages)
+        elif ext == ".docx":
             import requisition_parser
-            return "\n".join(requisition_parser.extract_paragraphs(local_path))
+            text = "\n".join(requisition_parser.extract_paragraphs(local_path))
     except Exception as e:
         print(f"text extract note ({local_path}): {e}")
-    return ""
+    # OCR fallback: scanned PDFs (no text layer) and images.
+    if ext in (".png", ".jpg", ".jpeg") or (ext == ".pdf" and len(text.strip()) < 30):
+        ocr = ocr_text(local_path)
+        if ocr:
+            text = (text + "\n" + ocr).strip()
+    return text
 
 
 def classify_document_type(local_path, filename):
@@ -148,10 +189,27 @@ def process_candidate_document(local_path, filename, meta=None):
         name_match = _identity_match(cand_name, filename, text) if cand_name else None
 
         extracted = {}
+        problems = []
+        if name_match is False:
+            problems.append(f"el nombre del candidato no aparece en {dtype}")
+        if dtype == "curp" and text:
+            m = re.search(r"[A-Z]{4}[0-9]{6}[HM][A-Z]{5}[0-9A-Z][0-9]", text.upper().replace(" ", ""))
+            if m:
+                extracted["curp"] = m.group(0)
+                if intern_id:
+                    cur.execute("SELECT curp FROM dim_interns WHERE intern_id=?", intern_id)
+                    rr = cur.fetchone()
+                    alta_curp = (rr[0] or "").upper() if rr and rr[0] else ""
+                    if alta_curp and alta_curp != extracted["curp"]:
+                        problems.append(f"la CURP del documento ({extracted['curp']}) no coincide con el alta ({alta_curp})")
         if dtype == "constancia" and text:
             m = re.search(r"(anticipated graduation|graduation date|fecha de graduaci[oó]n)[:\s]*([A-Za-z0-9 ,/]+)", text, re.I)
             if m:
                 extracted["graduacion"] = m.group(2).strip()[:40]
+                if intern_id:
+                    cur.execute("UPDATE dim_interns SET fecha_graduacion = COALESCE(fecha_graduacion, ?) WHERE intern_id=?",
+                                extracted["graduacion"], intern_id)
+
         doc_id = "DOC-" + str(uuid.uuid4())[:8]
         cur.execute(
             """INSERT INTO fact_intern_documents
@@ -161,11 +219,12 @@ def process_candidate_document(local_path, filename, meta=None):
             doc_id, intern_id, "candidate_docs", dtype, filename, meta.get("source_blob"),
             (1 if name_match else 0) if name_match is not None else None,
             json.dumps(extracted) if extracted else None,
-            "received", None if name_match in (True, None) else "name does not match candidate",
+            "problem" if problems else "received", "; ".join(problems) if problems else None,
         )
         conn.commit()
-        print(f"  doc: {filename} → type={dtype} intern={intern_id} name_match={name_match}")
-        return {"document_id": doc_id, "intern_id": intern_id, "document_type": dtype, "name_match": name_match}
+        print(f"  doc: {filename} → type={dtype} intern={intern_id} name_match={name_match} extracted={extracted}")
+        return {"document_id": doc_id, "intern_id": intern_id, "document_type": dtype,
+                "name_match": name_match, "extracted": extracted, "problems": problems}
     finally:
         cur.close(); conn.close()
 
@@ -180,24 +239,23 @@ def check_candidate_documents_complete(intern_id, sender_email=None):
         row = cur.fetchone()
         cand_name, cand_email = (row[0], row[1]) if row else (None, None)
         cur.execute(
-            "SELECT document_type, name_match FROM fact_intern_documents "
+            "SELECT document_type, notes FROM fact_intern_documents "
             "WHERE intern_id=? AND stage='candidate_docs'", intern_id)
         rows = cur.fetchall()
         received = {r[0] for r in rows}
-        mismatches = sorted({r[0] for r in rows if r[1] == 0})
+        doc_problems = sorted({r[1] for r in rows if r[1]})
         missing = [d for d in REQUIRED_CANDIDATE_DOCS if d not in received]
 
         problems = []
         if missing:
             problems.append("faltan documentos: " + ", ".join(missing))
-        if mismatches:
-            problems.append("el nombre no coincide en: " + ", ".join(mismatches))
+        problems.extend(doc_problems)
 
         if problems:
             cur.execute("UPDATE dim_interns SET documents_status='incomplete' WHERE intern_id=?", intern_id)
             conn.commit()
             ob._return_to_sender(sender_email or cand_email, "documentos del practicante", problems)
-            return {"status": "incomplete", "intern_id": intern_id, "missing": missing, "mismatches": mismatches}
+            return {"status": "incomplete", "intern_id": intern_id, "missing": missing, "problems": doc_problems}
 
         cur.execute("UPDATE dim_interns SET documents_status='complete' WHERE intern_id=?", intern_id)
         conn.commit()
