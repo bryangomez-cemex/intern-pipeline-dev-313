@@ -114,6 +114,58 @@ def parse_sender_and_reqid(sender_header, subject):
     return sender_email, requisition_id
 
 
+def get_email_body(msg):
+    """Return the plain-text body of an email message."""
+    if msg.is_multipart():
+        for part in msg.walk():
+            disp = str(part.get("Content-Disposition") or "")
+            if part.get_content_type() == "text/plain" and "attachment" not in disp.lower():
+                try:
+                    return part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", "ignore")
+                except Exception:
+                    continue
+        return ""
+    try:
+        return msg.get_payload(decode=True).decode(msg.get_content_charset() or "utf-8", "ignore")
+    except Exception:
+        return ""
+
+
+def _strip_accents(value):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", value or "") if not unicodedata.combining(c)).lower().strip()
+
+
+# Fields the intern returns in the body of the Welcome 1 reply.
+BODY_LABELS = [
+    (["nombre completo"], "nombre_completo"),
+    (["como te gusta que te digan", "apodo", "como te dicen"], "apodo"),
+    (["fecha de nacimiento"], "fecha_nacimiento"),
+    (["fecha estimada de graduacion", "fecha de graduacion", "graduacion"], "fecha_graduacion"),
+    (["telefono celular", "telefono", "celular"], "telefono"),
+    (["enlace a tu perfil de linkedin", "perfil de linkedin", "linkedin"], "linkedin"),
+]
+
+
+def parse_intern_email_body(text):
+    """Extract the intern-supplied fields (nombre, apodo, nacimiento, graduación,
+    teléfono, LinkedIn) from a 'Label: value' email body."""
+    out = {}
+    for raw in (text or "").splitlines():
+        if ":" not in raw:
+            continue
+        label, _, value = raw.partition(":")
+        ln = _strip_accents(label).replace("¿", "").replace("?", "").strip()
+        value = value.strip()
+        if not value:
+            continue
+        for keys, field in BODY_LABELS:
+            if field not in out and any(k in ln for k in keys):
+                out[field] = value[:200]
+                break
+    return out
+
+
 def connect_imap():
     if not IMAP_USERNAME:
         raise ValueError("IMAP_USERNAME is missing from .env")
@@ -187,6 +239,18 @@ def intake_gmail_attachments():
             print(f"From: {sender}")
             print(f"Subject: {subject}")
 
+            import json as _json
+            sender_email, requisition_id = parse_sender_and_reqid(sender, subject)
+            body_fields = parse_intern_email_body(get_email_body(msg))
+            if body_fields:
+                print(f"Body fields parsed: {list(body_fields.keys())}")
+            blob_metadata = {
+                "sender_email": sender_email,
+                "email_subject": (subject or "")[:200],
+                "requisition_id": requisition_id,
+                "body_fields": _json.dumps(body_fields) if body_fields else "",
+            }
+
             attachments_found = 0
 
             for part in msg.walk():
@@ -221,12 +285,7 @@ def intake_gmail_attachments():
                     email_uid=email_id.decode()
                 )
 
-                sender_email, requisition_id = parse_sender_and_reqid(sender, subject)
-                upload_file_to_blob(local_path, blob_name, metadata={
-                    "sender_email": sender_email,
-                    "email_subject": (subject or "")[:200],
-                    "requisition_id": requisition_id,
-                })
+                upload_file_to_blob(local_path, blob_name, metadata=blob_metadata)
                 uploaded_blobs.append(blob_name)
 
                 print(f"Uploaded attachment: {filename}")

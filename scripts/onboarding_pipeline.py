@@ -10,6 +10,7 @@ goes to DEV_EMAIL_OVERRIDE with the real intended recipient noted in the body).
 import os
 import re
 import sys
+import json
 import uuid
 import smtplib
 import unicodedata
@@ -286,6 +287,27 @@ def process_requisicion(local_path, meta=None):
         cur.close(); conn.close()
 
 
+def apply_email_body_fields(cur, intern_id, meta):
+    """Fill candidate fields the intern supplied in the Welcome 1 email body
+    (teléfono, apodo, LinkedIn, fecha de graduación). COALESCE so the alta wins."""
+    raw = (meta or {}).get("body_fields")
+    if not raw or not intern_id:
+        return {}
+    try:
+        body = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except Exception:
+        return {}
+    cols = {"telefono": "telefono", "apodo": "apodo", "linkedin": "linkedin", "fecha_graduacion": "fecha_graduacion"}
+    sets, vals = [], []
+    for key, col in cols.items():
+        if body.get(key):
+            sets.append(f"[{col}] = COALESCE([{col}], ?)")
+            vals.append(str(body[key])[:200])
+    if sets:
+        cur.execute(f"UPDATE dim_interns SET {', '.join(sets)} WHERE intern_id = ?", *vals, intern_id)
+    return body
+
+
 def process_candidate(local_path, meta=None):
     meta = meta or {}
     fields, beneficiaries = parse_alta_excel(local_path)
@@ -338,6 +360,7 @@ def process_candidate(local_path, meta=None):
                 "BEN-" + str(uuid.uuid4())[:8], pra_id, b["nombre"], b["paterno"], b["materno"],
                 b["parentesco"], b["porcentaje"], meta.get("source_blob"),
             )
+        apply_email_body_fields(cur, pra_id, meta)
         conn.commit()
         # confirmation / welcome to the candidate
         send_email(fields.get("email_personal") or "candidate",
