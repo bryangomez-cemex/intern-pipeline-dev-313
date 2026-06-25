@@ -13,6 +13,69 @@ Branch: `codex/intern-pipeline-production-readiness`
 - `b3abc8c Clarify Claude handoff scope`
 - `c1e4083 Make Claude handoff changes-only`
 
+## Azure Resource Changes
+
+Azure account/subscription context used during this chat:
+
+- Account: `bryan.gomez@ext.cemex.com`
+- Subscription: `Azure subscription 1`
+- Subscription ID: `a3d54e37-bfef-4efb-8f09-f6d848b499c7`
+- Tenant ID: `6ee19001-d0c4-45f8-af8b-ff00f16d07e1`
+
+Azure resources confirmed or configured:
+
+- Resource group: `rg-intern-pipeline-dev`
+- Function App: `mex-intern-pipeline-func-win`
+- Function host: `mex-intern-pipeline-func-win-axgkagdsdgfbebc6.centralus-01.azurewebsites.net`
+- SQL server: `rg-intern-system-devbge.database.windows.net`
+- SQL database: `rg-intern-system-dev`
+- Storage account: `rginternpipelinedevb961`
+- Document Intelligence resource: `docintel-intern-pipeline-dev`
+
+Storage containers created or confirmed:
+
+- `raw-uploads`
+- `error-reports`
+- `archive`
+
+Function App settings confirmed or changed:
+
+- `AZURE_SQL_CONNECTION_STRING`
+- `AZURE_SQL_AUTH_MODE=sql_password`
+- `AZURE_SQL_SERVER=rg-intern-system-devbge.database.windows.net`
+- `AZURE_SQL_DATABASE=rg-intern-system-dev`
+- `DOC_INTEL_ENDPOINT`
+- `DOC_INTEL_KEY`
+- `EMAIL_MODE=simulation`
+- `EMAIL_PROVIDER=simulation`
+- `SEND_EMAILS=false`
+- `ENABLE_ADMIN_SQL_SETUP=false`
+
+Azure SQL firewall/provider work completed:
+
+- Confirmed SQL public network access was enabled.
+- Confirmed existing `AllowAllWindowsAzureIps` rule.
+- Created and deleted a temporary local SQL firewall rule during troubleshooting.
+- Registered Azure provider `Microsoft.ContainerInstance`.
+
+Temporary Azure resources created and removed:
+
+- Azure Container Instance `aci-sql-setup-20260625`.
+- Azure Container Instance `aci-sql-verify-20260625`.
+- Azure Files shares named `sqlsetup*`.
+
+Azure verification result:
+
+- Function App state: `Running`.
+- Indexed functions:
+  - `process_raw_upload`
+  - `setup_database`
+  - `setup_database_on_startup`
+- Safety app settings:
+  - `EMAIL_MODE=simulation`
+  - `SEND_EMAILS=false`
+  - `ENABLE_ADMIN_SQL_SETUP=false`
+
 ## Package 1
 
 Changed Package 1 requirements:
