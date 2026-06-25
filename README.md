@@ -30,7 +30,8 @@ All paths call `scripts/pipeline_service.py`, which writes Azure SQL records, cr
 
 ## Main Setup
 
-For a fresh Azure SQL database, run these SQL scripts in this order:
+When configuring a new empty Azure SQL database for this existing project, run
+these SQL scripts in this order:
 
 ```text
 scripts/sql/00_create_core_legacy_tables.sql

@@ -3,16 +3,27 @@
 Date: 2026-06-25  
 Repo: `/Users/bryangomezcemex/intern-system-pipeline`  
 Branch: `codex/intern-pipeline-production-readiness`  
-Latest local commit before this handoff: `eeef3c8 Add fresh Azure SQL setup support`
+Recent local commits before this handoff:
+
+- `a9aedc8 Document Claude handoff and fresh Azure setup`
+- `eeef3c8 Add fresh Azure SQL setup support`
+- `e9f003b Add baja transition communications`
 
 ## Current Status
 
-The intern/practicante automation pipeline has been upgraded and configured for
-the new Azure account/resources. Azure SQL has been initialized successfully, the
-Azure Function App has been deployed, and safety settings are currently enabled
-for simulation-only email behavior.
+The intern/practicante automation pipeline already existed and had worked in the
+previous project/Azure environment. This handoff is not a "start from zero"
+handoff. The recent work was production-readiness cleanup, business logic
+updates, documentation, and migration/configuration to Bryan's new Azure
+account/resources.
 
-Do not deploy again unless Bryan explicitly asks for it.
+Azure SQL has been initialized successfully in the new resources, the Azure
+Function App is running, and safety settings are currently enabled for
+simulation-only email behavior.
+
+Do not deploy. Deployment actions in the history were done by Codex for Bryan;
+Claude should not treat deployment as a requested next step unless Bryan
+explicitly asks.
 
 ## Azure Resources In Use
 
@@ -38,7 +49,7 @@ Document Intelligence keys, SMTP secrets, or Graph secrets.
 
 ## Confirmed App Settings / Safety State
 
-Confirmed after final deploy:
+Confirmed after the latest Azure configuration pass:
 
 - `EMAIL_MODE=simulation`
 - `SEND_EMAILS=false`
@@ -238,9 +249,11 @@ PRESIDENCIA MEXICO                                         1
 - Legacy operational tables are still retained for audit, compatibility, and
   pipeline writes.
 
-### Fresh Azure Account Setup
+### Azure Resource Migration / Configuration
 
 New Azure resources were configured after Bryan switched accounts/subscription.
+This was a resource migration/configuration task, not a rebuild of the project
+from scratch.
 
 Actions completed:
 
@@ -255,15 +268,16 @@ Actions completed:
   - `SEND_EMAILS=false`
   - `EMAIL_PROVIDER=simulation`
 - Corrected `AZURE_SQL_CONNECTION_STRING`.
-- Synced Function modules.
-- Deployed Function App ZIP successfully.
-- Restarted Function App.
+- Synced Function modules during Codex's deployment pass.
+- Deployed Function App ZIP successfully during Codex's deployment pass.
+- Restarted Function App during Codex's deployment pass.
 - Confirmed Function App running.
 
-### Fresh Azure SQL Setup
+### New Azure SQL Database Compatibility Setup
 
 The original SQL scripts assumed several legacy/base tables already existed.
-For a brand-new database, that failed. Added base setup scripts:
+That was true in the previous working project, but the new Azure SQL database
+did not yet have those base objects. Added base setup scripts:
 
 - `scripts/sql/00_create_core_legacy_tables.sql`
 - `scripts/sql/00_create_dim_interns.sql`
@@ -276,7 +290,8 @@ These create base compatibility tables needed by views and pipeline writes:
 - `fact_communications`
 - `dim_validation_rules`
 
-Correct fresh database SQL order:
+Correct SQL order when configuring a new empty Azure SQL database for this
+existing project:
 
 ```text
 scripts/sql/00_create_core_legacy_tables.sql
@@ -334,6 +349,7 @@ Do not enable this unless intentionally rerunning setup/migrations.
 
 Important commits on `codex/intern-pipeline-production-readiness`:
 
+- `a9aedc8 Document Claude handoff and fresh Azure setup`
 - `d84ca23 Implement intern pipeline production readiness`
 - `e9f003b Add baja transition communications`
 - `eeef3c8 Add fresh Azure SQL setup support`
@@ -403,7 +419,7 @@ Recommended next checks:
 6. Do not clean production data unless Bryan explicitly confirms the new real
    Excel is ready to load and backups/export are handled.
 
-## Commands Worth Knowing
+## Commands Worth Knowing For Local Verification
 
 Sync Function modules/scripts:
 
@@ -423,20 +439,6 @@ Safe smoke tests:
 .venv/bin/python scripts/check_function_readiness.py
 .venv/bin/python scripts/smoke_e2e_pipeline.py
 SMOKE_CHECK_SQL_VIEWS=1 .venv/bin/python scripts/smoke_e2e_pipeline.py
-```
-
-Function deploy, only if Bryan asks:
-
-```bash
-cd azure_function_app
-zip -r /tmp/mex-intern-pipeline.zip . \
-  -x '*.pyc' '__pycache__/*' '*/__pycache__/*' '.DS_Store' \
-     'local.settings.json' '.env' '.venv/*'
-
-az functionapp deployment source config-zip \
-  --resource-group rg-intern-pipeline-dev \
-  --name mex-intern-pipeline-func-win \
-  --src /tmp/mex-intern-pipeline.zip
 ```
 
 ## Cautions
