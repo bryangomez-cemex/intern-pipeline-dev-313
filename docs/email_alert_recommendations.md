@@ -46,6 +46,16 @@ This is the recommended alert catalog. Do not enable all alerts at once; pick th
 - Suggested frequency: daily morning summary.
 - Include: intern name, employee number, VP, manager, contract end date, days overdue.
 
+### Baja De Practicante
+
+- Trigger: a current intern sync changes an intern from active/`ST002`/`Activo` to inactive/`Inactivo`/`Baja`.
+- Recipients: HR operations.
+- Suggested frequency: immediate.
+- Source: `fact_intern_lifecycle_events.event_type = 'baja_requested'` and `fact_communications.communication_type = 'Baja De Practicante'`.
+- Email subject: `Baja De Practicante - {Nombre completo}`
+- Include: personal data, university/career/semester, CEMEX ID, institutional email, VP, project, manager, AIRH, UDN, company, OI, CC, salary, start date, end date, final status.
+- Current implementation: creates a prepared HR communication automatically when the transition is detected; real delivery depends on the configured email sender job/settings.
+
 ### Contract Ending In 30 Days
 
 - Trigger: active intern has `days_until_contract_end BETWEEN 0 AND 30`.

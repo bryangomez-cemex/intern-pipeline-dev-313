@@ -1110,6 +1110,130 @@ def prepare_intern_confirmation_communication(
     )
 
 
+def format_email_value(value):
+    value = clean_value(value)
+
+    if value is None:
+        return ""
+
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d")
+
+    return str(value)
+
+
+def build_baja_email_subject(context):
+    intern_name = format_email_value(context.get("nombre_completo")) or "Sin nombre"
+    return f"Baja De Practicante - {intern_name}"
+
+
+def build_baja_email_body(context):
+    lines = [
+        "Se adjunta la información relacionada.",
+        "FAVOR DE GESTIONAR BAJA.",
+        f"Fecha de nacimiento: {format_email_value(context.get('fecha_nacimiento'))}",
+        f"Correo personal: {format_email_value(context.get('email_personal'))}",
+        f"Universidad: {format_email_value(context.get('universidad'))}",
+        f"Carrera: {format_email_value(context.get('carrera'))}",
+        f"Semestre: {format_email_value(context.get('semestre'))}",
+        f"Fecha de graduación: {format_email_value(context.get('fecha_graduacion'))}",
+        f"CEMEX-ID: {format_email_value(context.get('cemex_id'))}",
+        f"Correo institucional CEMEX: {format_email_value(context.get('correo_institucional'))}",
+        "",
+        f"Vicepresidencia: {format_email_value(context.get('vp_hc'))}",
+        f"Nombre del proyecto: {format_email_value(context.get('nombre_proyecto'))}",
+        f"Jefe directo: {format_email_value(context.get('jefe_inmediato'))}",
+        f"AIRH: {format_email_value(context.get('asesor_rrhh_hc'))}",
+        f"Ubicación UDN: {format_email_value(context.get('ubicacion_udn'))}",
+        f"Compañia: {format_email_value(context.get('compania'))}",
+        f"OI: {format_email_value(context.get('oi'))}",
+        f"CC: {format_email_value(context.get('cc'))}",
+        f"Sueldo: {format_email_value(context.get('salario_mensual'))}",
+        f"Fecha de ingreso: {format_email_value(context.get('fecha_de_ingreso'))}",
+        f"Fecha fin: {format_email_value(context.get('fecha_contrato_vence'))}",
+        f"Estado de practicante: {format_email_value(context.get('estado_practicante'))}",
+        f"Nombre completo: {format_email_value(context.get('nombre_completo'))}",
+        "",
+        "Este correo fue generado automáticamente por el intern-system pipeline.",
+    ]
+    return "\n".join(lines)
+
+
+def fetch_baja_context(cursor, intern_id, fallback_status=None):
+    cursor.execute(
+        """
+        SELECT TOP 1
+            i.nombre_completo,
+            i.fecha_nacimiento,
+            i.email_personal,
+            i.universidad,
+            i.carrera,
+            i.semestre,
+            i.fecha_graduacion,
+            COALESCE(i.cemex_id, i.num_empleado_cemex) AS cemex_id,
+            i.correo_institucional,
+            i.vp_hc,
+            COALESCE(r.descripcion_proyecto, r.puesto, i.puesto) AS nombre_proyecto,
+            i.jefe_inmediato,
+            i.asesor_rrhh_hc,
+            COALESCE(i.ubicacion_udn, i.ubicacion_hc) AS ubicacion_udn,
+            COALESCE(i.compania, i.cia_hc) AS compania,
+            COALESCE(i.oi, i.oi_hc) AS oi,
+            COALESCE(i.cc, i.cc_hc) AS cc,
+            i.salario_mensual,
+            i.fecha_de_ingreso,
+            i.fecha_contrato_vence,
+            i.status_id AS estado_practicante
+        FROM dbo.dim_interns i
+        LEFT JOIN dbo.dim_requisitions r
+            ON i.requisition_id = r.requisition_id
+        WHERE i.intern_id = ?
+        """,
+        intern_id,
+    )
+    row = cursor.fetchone()
+    if not row:
+        return {"intern_id": intern_id, "estado_practicante": fallback_status}
+
+    columns = [column[0] for column in cursor.description]
+    context = dict(zip(columns, row))
+    if fallback_status:
+        context["estado_practicante"] = fallback_status
+    context["intern_id"] = intern_id
+    return context
+
+
+def prepare_baja_communication(
+    cursor,
+    intern_id,
+    source_file_id,
+    old_status,
+    new_status,
+):
+    context = fetch_baja_context(cursor, intern_id, fallback_status=new_status)
+    subject = build_baja_email_subject(context)
+    body = build_baja_email_body(context)
+
+    return insert_communication(
+        cursor=cursor,
+        intern_id=intern_id,
+        requisition_id=None,
+        file_id=source_file_id,
+        email_template_id="ET_BAJA",
+        communication_type="Baja De Practicante",
+        recipient_group="HR",
+        recipient_email=resolve_group_recipients(
+            cursor,
+            "HR",
+            os.getenv("DEV_EMAIL_OVERRIDE") or "dev.hr@example.com",
+        ),
+        subject=subject,
+        body=body,
+        status="Prepared",
+        error_message=f"Auto-prepared from status transition {old_status} -> {new_status}.",
+    )
+
+
 # ============================================================
 # EXCEL VALIDATION
 # ============================================================
@@ -1641,6 +1765,7 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
 
     fecha_de_ingreso = clean_date(row.get("FechadeIngreso"))
     fecha_contrato_vence = clean_date(row.get("FechaContratoVence"))
+    status_id = clean_value(row.get("Estatus")) or "ST002"
 
     cursor.execute(
         """
@@ -1806,7 +1931,7 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
         clean_org_value(row.get("OI HC")),
         clean_org_value(row.get("CIA HC")),
         clean_value(row.get("Area")),
-        "ST002",
+        status_id,
         fecha_de_ingreso,
         fecha_contrato_vence,
     )
@@ -1953,6 +2078,59 @@ def normalize_status(value):
         .replace("ó", "o")
         .replace("ú", "u")
     )
+
+
+ACTIVE_STATUS_VALUES = {"active", "activo", "st002"}
+INACTIVE_STATUS_VALUES = {"inactive", "inactivo", "baja", "st003", "st004"}
+
+
+def status_family(value):
+    normalized = normalize_status(value)
+
+    if normalized in ACTIVE_STATUS_VALUES:
+        return "active"
+
+    if normalized in INACTIVE_STATUS_VALUES:
+        return "inactive"
+
+    return normalized
+
+
+def is_active_to_baja_transition(old_status, new_status):
+    return status_family(old_status) == "active" and status_family(new_status) == "inactive"
+
+
+def get_effective_intern_status(cursor, intern_id):
+    if not intern_id:
+        return None
+
+    try:
+        cursor.execute(
+            """
+            SELECT TOP 1 new_status
+            FROM dbo.fact_intern_lifecycle_events
+            WHERE intern_id = ?
+              AND new_status IS NOT NULL
+            ORDER BY event_date DESC, created_at DESC
+            """,
+            intern_id,
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            return row[0]
+    except Exception as status_error:
+        print(f"Could not read latest lifecycle status for {intern_id}: {status_error}")
+
+    cursor.execute(
+        """
+        SELECT TOP 1 status_id
+        FROM dbo.dim_interns
+        WHERE intern_id = ?
+        """,
+        intern_id,
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
 
 
 def validate_current_intern_lifecycle(row):
@@ -2147,6 +2325,8 @@ def process_lifecycle_row(cursor, row, classification, run_id, file_id, row_numb
             return matched_intern_id, row_errors, False
 
         target_intern_id = matched_intern_id or intern_id
+        previous_status = get_effective_intern_status(cursor, matched_intern_id) if matched_intern_id else None
+        incoming_status = clean_value(row.get("Estatus"))
         insert_or_update_intern(cursor, row, intern_id_override=target_intern_id)
 
         insert_lifecycle_event(
@@ -2158,10 +2338,34 @@ def process_lifecycle_row(cursor, row, classification, run_id, file_id, row_numb
             event_type="current_intern_sync",
             event_status="Updated" if matched_intern_id else "Created",
             source_row_number=row_number,
-            new_status=clean_value(row.get("Estatus")),
+            old_status=previous_status,
+            new_status=incoming_status,
             message="Current intern record updated from sync file." if matched_intern_id else "Current intern record created from sync file.",
             needs_review=0
         )
+
+        if is_active_to_baja_transition(previous_status, incoming_status):
+            baja_communication_id = prepare_baja_communication(
+                cursor=cursor,
+                intern_id=target_intern_id,
+                source_file_id=file_id,
+                old_status=previous_status,
+                new_status=incoming_status,
+            )
+            insert_lifecycle_event(
+                cursor=cursor,
+                run_id=run_id,
+                file_id=file_id,
+                intern_id=target_intern_id,
+                process_type_id="PROC_BAJA",
+                event_type="baja_requested",
+                event_status="Prepared",
+                source_row_number=row_number,
+                old_status=previous_status,
+                new_status=incoming_status,
+                message=f"Prepared HR baja communication {baja_communication_id}.",
+                needs_review=0,
+            )
 
         for rule_id, field_name, message, suggested_fix in lifecycle_errors:
             insert_lifecycle_event(

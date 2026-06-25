@@ -419,6 +419,87 @@ Missing manager: 0
 Duplicate employee numbers: 0
 ```
 
+## 11.1 Baja Automation
+
+The current-intern sync detects when an existing intern changes from active to inactive/baja.
+
+Active status values:
+
+```text
+Activo
+active
+ST002
+```
+
+Inactive/baja status values:
+
+```text
+Baja
+Inactivo
+inactive
+ST003
+ST004
+```
+
+When the transition is:
+
+```text
+active -> inactive/baja
+```
+
+the pipeline:
+
+1. Updates `dim_interns.status_id` with the incoming status from the sync file.
+2. Inserts a lifecycle event:
+
+```text
+fact_intern_lifecycle_events.event_type = baja_requested
+fact_intern_lifecycle_events.event_status = Prepared
+fact_intern_lifecycle_events.process_type_id = PROC_BAJA
+```
+
+3. Creates an HR communication:
+
+```text
+fact_communications.communication_type = Baja De Practicante
+fact_communications.recipient_group = HR
+fact_communications.status = Prepared
+```
+
+Email subject format:
+
+```text
+Baja De Practicante - {NOMBRE COMPLETO}
+```
+
+Email body includes:
+
+```text
+Fecha de nacimiento
+Correo personal
+Universidad
+Carrera
+Semestre
+Fecha de graduacion
+CEMEX-ID
+Correo institucional CEMEX
+Vicepresidencia
+Nombre del proyecto
+Jefe directo
+AIRH
+Ubicacion UDN
+Compania
+OI
+CC
+Sueldo
+Fecha de ingreso
+Fecha fin
+Estado de practicante
+Nombre completo
+```
+
+The communication is prepared automatically. Real delivery still follows the configured communication sender safety controls.
+
 ## 12. Document Handling
 
 Files:
@@ -688,9 +769,10 @@ Recommended first alerts:
 2. File Moved To Failed.
 3. Bad Rows Detected.
 4. Missing Requisition ID.
-5. Contract Expired But Still Active.
-6. Contract Ending In 30 Days.
-7. Power BI Refresh Failed.
+5. Baja De Practicante.
+6. Contract Expired But Still Active.
+7. Contract Ending In 30 Days.
+8. Power BI Refresh Failed.
 
 Do not enable every alert at once. Start with production-critical alerts, then add HR operational alerts after real-world testing.
 
@@ -1036,6 +1118,18 @@ Restart Function:
 az functionapp restart \
   --resource-group rg-intern-system-dev \
   --name mex-intern-pipeline-func-win
+```
+
+Send a one-time report of active interns with expired contracts:
+
+```bash
+.venv/bin/python scripts/send_expired_active_contracts_email.py
+```
+
+The command above is a dry run. To actually send through configured SMTP:
+
+```bash
+.venv/bin/python scripts/send_expired_active_contracts_email.py --send
 ```
 
 ## 28. Final Current State

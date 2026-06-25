@@ -489,6 +489,57 @@ def check_org_relationship_enrichment(pipeline_service):
     assert_equal(oi_enriched["CIA HC"], "7180", "OI HC -> CIA HC")
 
 
+def check_baja_communication_logic(pipeline_service):
+    print_section("Baja Communication Logic")
+
+    assert_equal(pipeline_service.status_family("Activo"), "active", "Activo status family")
+    assert_equal(pipeline_service.status_family("ST002"), "active", "ST002 status family")
+    assert_equal(pipeline_service.status_family("Baja"), "inactive", "Baja status family")
+    assert_equal(pipeline_service.status_family("Inactivo"), "inactive", "Inactivo status family")
+    assert_true(
+        pipeline_service.is_active_to_baja_transition("Activo", "Baja"),
+        "Activo -> Baja transition detected",
+    )
+    assert_true(
+        pipeline_service.is_active_to_baja_transition("ST002", "Inactivo"),
+        "ST002 -> Inactivo transition detected",
+    )
+    assert_true(
+        not pipeline_service.is_active_to_baja_transition("Baja", "Baja"),
+        "Baja -> Baja does not duplicate",
+    )
+
+    context = {
+        "nombre_completo": "YOLANDA SANCHEZ CAMOU",
+        "fecha_nacimiento": "2001-01-01",
+        "email_personal": "yolanda@example.com",
+        "universidad": "Universidad Demo",
+        "carrera": "Ingenieria",
+        "semestre": "8",
+        "fecha_graduacion": "2026-12",
+        "cemex_id": "CEMEX-123",
+        "correo_institucional": "yolanda@cemex.com",
+        "vp_hc": "CADENA DE SUMINISTRO",
+        "nombre_proyecto": "Proyecto Demo",
+        "jefe_inmediato": "Manager Demo",
+        "asesor_rrhh_hc": "AIRH Demo",
+        "ubicacion_udn": "PLANTA MONTERREY",
+        "compania": "CEMEX",
+        "oi": "88001234",
+        "cc": "3024178716",
+        "salario_mensual": "8800",
+        "fecha_de_ingreso": "2026-01-01",
+        "fecha_contrato_vence": "2026-06-30",
+        "estado_practicante": "Baja",
+    }
+    subject = pipeline_service.build_baja_email_subject(context)
+    body = pipeline_service.build_baja_email_body(context)
+    assert_equal(subject, "Baja De Practicante - YOLANDA SANCHEZ CAMOU", "Baja email subject")
+    assert_true("FAVOR DE GESTIONAR BAJA." in body, "Baja email instruction")
+    assert_true("Correo personal: yolanda@example.com" in body, "Baja email personal email")
+    assert_true("Estado de practicante: Baja" in body, "Baja email status")
+
+
 def check_sql_views_if_requested():
     if os.getenv("SMOKE_CHECK_SQL_VIEWS", "").strip().lower() not in {"1", "true", "yes"}:
         print("\nSQL view check skipped. Set SMOKE_CHECK_SQL_VIEWS=1 to run a read-only Azure SQL check.")
@@ -560,6 +611,7 @@ def main():
     )
     check_matching_engine(modules["matching_engine"])
     check_org_relationship_enrichment(modules["pipeline_service"])
+    check_baja_communication_logic(modules["pipeline_service"])
     check_sql_views_if_requested()
     print("\nSmoke test passed.")
 
