@@ -738,16 +738,19 @@ def _resolve_recipients(cursor):
     (RH_RECIPIENT_EMAILS / COPARMEX_RECIPIENT_EMAILS); fall back to the
     dim_email_recipients table if an env list is not configured."""
     out = {"HR": _parse_emails(RH_RECIPIENT_EMAILS), "Coparmex": _parse_emails(COPARMEX_RECIPIENT_EMAILS)}
-    try:
-        cursor.execute(
-            "SELECT recipient_group, email FROM dim_email_recipients "
-            "WHERE active_flag = 1 AND recipient_group IN ('HR','Coparmex')"
-        )
-        for group, email in cursor.fetchall():
-            if email and not out.get(group):
-                out[group] = (out.get(group) or []) + [email]
-    except Exception as e:
-        print("recipient resolve note:", e)
+    # Only consult the optional dim_email_recipients table when the env lists don't
+    # already cover both groups (the table may not exist on simplified schemas).
+    if not (out["HR"] and out["Coparmex"]):
+        try:
+            cursor.execute(
+                "SELECT recipient_group, email FROM dim_email_recipients "
+                "WHERE active_flag = 1 AND recipient_group IN ('HR','Coparmex')"
+            )
+            for group, email in cursor.fetchall():
+                if email and not out.get(group):
+                    out[group] = (out.get(group) or []) + [email]
+        except Exception as e:
+            print("recipient resolve note:", e)
     # Collapse to a ';'-joined string (or None) for the existing call sites.
     return {g: (";".join(v) if v else None) for g, v in out.items()}
 
