@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -187,8 +188,8 @@ def build_cases(run_id):
                 "ASESOR RRHH HC": "RH TEST",
                 "NombreCompleto": "FAKE TEST REQUISITION",
             }],
-            "expected_status": "PASS_WITH_GAP",
-            "expected_gaps": ["unique_position_number_generation"],
+            "expected_status": "PASS",
+            "expected_gaps": [],
         },
         {
             "name": "New Hire pass",
@@ -371,11 +372,9 @@ def run_live_case(case, run_id, work_dir, args):
             container.upload_blob(blob_name, handle, overwrite=False)
         print(f"Uploaded live dry-run blob: {app_config.CONFIG.raw_uploads_container}/{blob_name}")
 
-        pipeline_result = pipeline_service.process_blob_by_name(
-            app_config.CONFIG.raw_uploads_container,
-            blob_name,
-            run_type="deployment_readiness_e2e",
-        )
+        pipeline_result = wait_for_live_sql_for_blob(blob_name)
+        if pipeline_result["status"] == "FAIL":
+            errors.extend(pipeline_result.get("errors", []))
 
         live_checks = check_live_sql_for_blob(blob_name)
         if live_checks["status"] == "FAIL":
@@ -473,6 +472,31 @@ def check_live_sql_for_blob(blob_name):
         return result("Live SQL blob check", "PASS", details={"fact_files_count": file_count})
     except Exception as exc:
         return result("Live SQL blob check", "FAIL", errors=[str(exc)])
+
+
+def wait_for_live_sql_for_blob(blob_name, timeout_seconds=180, poll_seconds=10):
+    deadline = time.time() + timeout_seconds
+    last_error = None
+
+    while time.time() < deadline:
+        check = check_live_sql_for_blob(blob_name)
+        if check["status"] == "PASS":
+            return result(
+                "Function-triggered live processing",
+                "PASS",
+                details={
+                    "blob_name": blob_name,
+                    "fact_files_count": check.get("details", {}).get("fact_files_count"),
+                },
+            )
+        last_error = "; ".join(check.get("errors", []))
+        time.sleep(poll_seconds)
+
+    return result(
+        "Function-triggered live processing",
+        "FAIL",
+        errors=[last_error or f"Timed out waiting for Function-triggered processing of {blob_name}"],
+    )
 
 
 def write_case_file(case, work_dir):

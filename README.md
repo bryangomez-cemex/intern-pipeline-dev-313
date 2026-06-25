@@ -35,9 +35,14 @@ Run these SQL scripts in Azure Query Editor:
 ```text
 scripts/sql/fix_file_id_source_file_id_compatibility.sql
 scripts/sql/create_full_mvp_pipeline.sql
+scripts/sql/seed_pipeline_validation_rules.sql
+scripts/sql/2026-06_package1_document_requirements.sql
+scripts/sql/2026-06_resolve_stale_missing_items.sql
 scripts/sql/add_corporate_column_aliases.sql
 scripts/sql/create_matching_engine_v1.sql
 scripts/sql/create_business_powerbi_views.sql
+scripts/sql/2026-06_schema_simplification.sql
+scripts/sql/2026-06_powerbi_no_dax_views.sql
 ```
 
 Run the compatibility script first when an older dev database already exists. It
@@ -57,6 +62,8 @@ AZURE_SQL_DATABASE=intern_system_dev
 AZURE_SQL_AUTH_MODE=interactive
 EMAIL_MODE=simulation
 DEV_EMAIL_OVERRIDE=dev-only@example.com
+DOC_INTEL_ENDPOINT=...
+DOC_INTEL_KEY=...
 ```
 
 `EMAIL_MODE=simulation` is the safe default.
@@ -72,37 +79,37 @@ source .venv/bin/activate
 Install local dependencies:
 
 ```bash
-python3 -m pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 Compile:
 
 ```bash
-python3 -m py_compile scripts/process_blob_file.py scripts/pipeline_service.py scripts/run_intake_pipeline.py scripts/flexible_file_classifier.py scripts/lifecycle_requirements.py scripts/matching_engine.py scripts/communication_packager.py scripts/graph_email_client.py scripts/send_prepared_communications.py scripts/send_real_dev_email_smtp.py scripts/check_function_readiness.py scripts/smoke_e2e_pipeline.py scripts/deployment_readiness_e2e.py
+.venv/bin/python -m py_compile scripts/process_blob_file.py scripts/pipeline_service.py scripts/run_intake_pipeline.py scripts/flexible_file_classifier.py scripts/lifecycle_requirements.py scripts/matching_engine.py scripts/communication_packager.py scripts/graph_email_client.py scripts/send_prepared_communications.py scripts/send_real_dev_email_smtp.py scripts/check_function_readiness.py scripts/smoke_e2e_pipeline.py scripts/deployment_readiness_e2e.py scripts/onboarding_pipeline.py scripts/document_pipeline.py scripts/requisition_parser.py
 ```
 
 Safe smoke test, no Blob/SQL writes and no real emails:
 
 ```bash
-python3 scripts/smoke_e2e_pipeline.py
+.venv/bin/python scripts/smoke_e2e_pipeline.py
 ```
 
 Deployment readiness E2E, offline by default with no Blob/SQL writes and no real emails:
 
 ```bash
-EMAIL_MODE=simulation python3 scripts/deployment_readiness_e2e.py
+EMAIL_MODE=simulation .venv/bin/python scripts/deployment_readiness_e2e.py
 ```
 
 Deployment readiness E2E against staging Azure, opt-in fake-data dry run only:
 
 ```bash
-EMAIL_MODE=simulation SEND_EMAILS=false EMAIL_DRY_RUN=true python3 scripts/deployment_readiness_e2e.py --live-azure --confirm-live-dry-run TEST
+EMAIL_MODE=simulation SEND_EMAILS=false EMAIL_DRY_RUN=true .venv/bin/python scripts/deployment_readiness_e2e.py --live-azure --confirm-live-dry-run TEST
 ```
 
 Optional read-only Azure SQL view check:
 
 ```bash
-SMOKE_CHECK_SQL_VIEWS=1 python3 scripts/smoke_e2e_pipeline.py
+SMOKE_CHECK_SQL_VIEWS=1 .venv/bin/python scripts/smoke_e2e_pipeline.py
 ```
 
 Local folder intake:
@@ -157,12 +164,27 @@ Upload a fake test file to `raw-uploads` and verify Azure SQL rows in the Power 
 
 Load these Azure SQL views:
 
-- `vw_interns_current`
-- `vw_full_mvp_interns_current`
-- `vw_full_mvp_document_status`
-- `vw_full_mvp_missing_items`
-- `vw_full_mvp_lifecycle_events`
+- `vw_canonical_interns_current`
+- `vw_canonical_intern_documents`
+- `vw_canonical_document_types`
+- `vw_canonical_org_assignments`
+- `vw_canonical_requisitions`
+- `vw_canonical_pipeline_runs`
 - `vw_business_validation_exceptions`
 - `vw_requisitions_status`
 - `vw_communications_status`
 - `vw_hr_actions_today`
+- `vw_powerbi_vacantes`
+- `vw_powerbi_costos_practicantes`
+- `vw_powerbi_expired_active_contracts`
+- `vw_powerbi_inactive_interns`
+- `vw_powerbi_vp_capacity`
+
+The legacy `vw_full_mvp_*` views remain available for compatibility, but new reporting should prefer `vw_powerbi_*` for requested HR pages and `vw_canonical_*` for shared entities.
+
+## Operations Docs
+
+- Technical manual: `docs/technical_manual.md`
+- Power BI Service setup without DAX/Desktop: `docs/power_bi_no_dax_5_pages.md`
+- Email alert recommendations: `docs/email_alert_recommendations.md`
+- Schema simplification notes: `docs/schema_simplification.md`

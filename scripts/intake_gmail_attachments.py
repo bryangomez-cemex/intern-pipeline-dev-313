@@ -1,6 +1,7 @@
 import os
 import imaplib
 import email
+import re
 from email.header import decode_header
 from datetime import datetime, UTC
 from pathlib import Path
@@ -33,6 +34,7 @@ INTAKE_SUBJECT_TAG = os.getenv("INTAKE_SUBJECT_TAG", "[INTERN]").strip()
 MAX_EMAILS_PER_RUN = int(os.getenv("INTAKE_MAX_EMAILS_PER_RUN", "25"))
 
 ALLOWED_EXTENSIONS = {".pdf", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".docx"}
+REQ_RE = re.compile(r"REQ-\d{4}-\d{3,}", re.IGNORECASE)
 
 DOWNLOAD_FOLDER = Path("data/email_intake_downloads")
 
@@ -103,15 +105,20 @@ def upload_file_to_blob(local_path, blob_name, metadata=None):
     return blob_name
 
 
-def parse_sender_and_reqid(sender_header, subject):
-    """Extract a clean sender email and any REQ-YYYY-#### tag from the subject."""
-    import re
+def extract_reqid(*texts):
+    for text in texts:
+        match = REQ_RE.search(text or "")
+        if match:
+            return match.group(0).upper()
+    return ""
+
+
+def parse_sender_and_reqid(sender_header, *texts):
+    """Extract a clean sender email and any REQ-YYYY-#### tag from email text."""
     from email.utils import parseaddr
 
     sender_email = parseaddr(sender_header or "")[1] or (sender_header or "")
-    match = re.search(r"REQ-\d{4}-\d{3,}", subject or "", re.IGNORECASE)
-    requisition_id = match.group(0).upper() if match else ""
-    return sender_email, requisition_id
+    return sender_email, extract_reqid(*texts)
 
 
 def get_email_body(msg):
@@ -144,12 +151,12 @@ BODY_LABELS = [
     (["fecha estimada de graduacion", "fecha de graduacion", "graduacion"], "fecha_graduacion"),
     (["telefono celular", "telefono", "celular"], "telefono"),
     (["enlace a tu perfil de linkedin", "perfil de linkedin", "linkedin"], "linkedin"),
+    (["contacto de emergencia", "emergencia"], "contacto_emergencia"),
 ]
 
 
 def parse_intern_email_body(text):
-    """Extract the intern-supplied fields (nombre, apodo, nacimiento, graduación,
-    teléfono, LinkedIn) from a 'Label: value' email body."""
+    """Extract intern-supplied Label: value fields from an email body."""
     out = {}
     for raw in (text or "").splitlines():
         if ":" not in raw:
@@ -240,11 +247,12 @@ def intake_gmail_attachments():
             print(f"Subject: {subject}")
 
             import json as _json
-            sender_email, requisition_id = parse_sender_and_reqid(sender, subject)
-            body_fields = parse_intern_email_body(get_email_body(msg))
+            email_body = get_email_body(msg)
+            sender_email, requisition_id = parse_sender_and_reqid(sender, subject, email_body)
+            body_fields = parse_intern_email_body(email_body)
             if body_fields:
                 print(f"Body fields parsed: {list(body_fields.keys())}")
-            blob_metadata = {
+            base_blob_metadata = {
                 "sender_email": sender_email,
                 "email_subject": (subject or "")[:200],
                 "requisition_id": requisition_id,
@@ -283,6 +291,15 @@ def intake_gmail_attachments():
                 blob_name = build_blob_name(
                     filename=filename,
                     email_uid=email_id.decode()
+                )
+
+                blob_metadata = dict(base_blob_metadata)
+                blob_metadata["requisition_id"] = extract_reqid(
+                    blob_metadata.get("requisition_id"),
+                    subject,
+                    email_body,
+                    filename,
+                    blob_name,
                 )
 
                 upload_file_to_blob(local_path, blob_name, metadata=blob_metadata)

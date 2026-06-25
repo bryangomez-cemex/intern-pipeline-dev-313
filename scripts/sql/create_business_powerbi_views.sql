@@ -20,14 +20,18 @@ END;
 GO
 
 IF COL_LENGTH('dbo.dim_requisitions', 'requisition_type') IS NULL ALTER TABLE dbo.dim_requisitions ADD requisition_type NVARCHAR(100) NULL;
+IF COL_LENGTH('dbo.dim_requisitions', 'process_type_id') IS NULL ALTER TABLE dbo.dim_requisitions ADD process_type_id NVARCHAR(50) NULL;
 IF COL_LENGTH('dbo.dim_requisitions', 'requisition_status') IS NULL ALTER TABLE dbo.dim_requisitions ADD requisition_status NVARCHAR(100) NULL;
 IF COL_LENGTH('dbo.dim_requisitions', 'requested_by') IS NULL ALTER TABLE dbo.dim_requisitions ADD requested_by NVARCHAR(255) NULL;
+IF COL_LENGTH('dbo.dim_requisitions', 'vp') IS NULL ALTER TABLE dbo.dim_requisitions ADD vp NVARCHAR(255) NULL;
 IF COL_LENGTH('dbo.dim_requisitions', 'vp_hc') IS NULL ALTER TABLE dbo.dim_requisitions ADD vp_hc NVARCHAR(255) NULL;
 IF COL_LENGTH('dbo.dim_requisitions', 'area') IS NULL ALTER TABLE dbo.dim_requisitions ADD area NVARCHAR(255) NULL;
+IF COL_LENGTH('dbo.dim_requisitions', 'manager_name') IS NULL ALTER TABLE dbo.dim_requisitions ADD manager_name NVARCHAR(255) NULL;
 IF COL_LENGTH('dbo.dim_requisitions', 'manager') IS NULL ALTER TABLE dbo.dim_requisitions ADD manager NVARCHAR(255) NULL;
 IF COL_LENGTH('dbo.dim_requisitions', 'oi_hc') IS NULL ALTER TABLE dbo.dim_requisitions ADD oi_hc NVARCHAR(255) NULL;
 IF COL_LENGTH('dbo.dim_requisitions', 'cc_hc') IS NULL ALTER TABLE dbo.dim_requisitions ADD cc_hc NVARCHAR(255) NULL;
 IF COL_LENGTH('dbo.dim_requisitions', 'company') IS NULL ALTER TABLE dbo.dim_requisitions ADD company NVARCHAR(255) NULL;
+IF COL_LENGTH('dbo.dim_requisitions', 'puesto') IS NULL ALTER TABLE dbo.dim_requisitions ADD puesto NVARCHAR(300) NULL;
 IF COL_LENGTH('dbo.dim_requisitions', 'requested_start_date') IS NULL ALTER TABLE dbo.dim_requisitions ADD requested_start_date DATE NULL;
 IF COL_LENGTH('dbo.dim_requisitions', 'requested_end_date') IS NULL ALTER TABLE dbo.dim_requisitions ADD requested_end_date DATE NULL;
 IF COL_LENGTH('dbo.dim_requisitions', 'created_at') IS NULL ALTER TABLE dbo.dim_requisitions ADD created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME();
@@ -126,6 +130,16 @@ INNER JOIN dbo.fact_process_requirements pr
 INNER JOIN dbo.dim_required_document_types rdt
     ON pr.required_document_type_id = rdt.required_document_type_id
 WHERE pr.requirement_scope = 'Applicant'
+  -- Only backfill missing applicant documents for real new-hire loads that have
+  -- source-file provenance. The current-interns master DB is historical and
+  -- should not be treated as an onboarding packet with every document missing.
+  AND EXISTS (
+      SELECT 1
+      FROM dbo.fact_hires h
+      WHERE h.intern_id = i.intern_id
+        AND h.process_type_id = 'PROC_NEW_HIRE'
+        AND h.source_file_id IS NOT NULL
+  )
   AND NOT EXISTS (
       SELECT 1
       FROM dbo.fact_intern_document_status ids
@@ -465,4 +479,215 @@ SELECT
     next_action
 FROM dbo.vw_communications_status
 WHERE next_action <> 'No action';
+GO
+
+CREATE OR ALTER VIEW dbo.vw_powerbi_vacantes AS
+SELECT
+    r.requisition_id,
+    COALESCE(r.puesto, r.requisition_type, 'Vacante sin puesto') AS position_name,
+    COALESCE(r.vp_hc, r.vp) AS vp,
+    r.area,
+    COALESCE(r.manager, r.manager_name) AS manager,
+    r.oi_hc,
+    r.cc_hc,
+    r.company AS cia_hc,
+    r.requisition_status,
+    r.requested_start_date,
+    r.requested_end_date,
+    r.created_at,
+    DATEDIFF(DAY, CAST(r.created_at AS DATE), CAST(SYSUTCDATETIME() AS DATE)) AS days_open,
+    'Asignar practicante' AS next_action
+FROM dbo.dim_requisitions r
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM dbo.dim_interns i
+    WHERE i.requisition_id = r.requisition_id
+)
+AND COALESCE(r.requisition_status, 'Open') NOT IN (
+    'Closed', 'Cerrada', 'Cancelada', 'Cancelled', 'Filled', 'Cubierta'
+);
+GO
+
+CREATE OR ALTER VIEW dbo.vw_powerbi_interns_status AS
+WITH latest_lifecycle AS (
+    SELECT
+        le.intern_id,
+        le.new_status,
+        le.event_date,
+        ROW_NUMBER() OVER (
+            PARTITION BY le.intern_id
+            ORDER BY le.event_date DESC, le.created_at DESC
+        ) AS rn
+    FROM dbo.fact_intern_lifecycle_events le
+    WHERE le.new_status IS NOT NULL
+),
+base AS (
+    SELECT
+        i.intern_id,
+        i.num_empleado AS employee_number,
+        i.num_empleado_cemex AS cemex_employee_number,
+        i.nombre_completo AS intern_name,
+        i.puesto AS position_name,
+        i.jefe_inmediato AS manager,
+        i.vp_hc AS vp,
+        i.ubicacion_hc,
+        i.estado_ubicacion_hc,
+        i.cia_hc,
+        i.oi_hc,
+        i.cc_hc,
+        i.fecha_de_ingreso AS start_date,
+        i.fecha_contrato_vence AS contract_end_date,
+        i.salario_mensual,
+        COALESCE(ll.new_status, i.status_id) AS raw_status,
+        ll.event_date AS latest_status_event_date
+    FROM dbo.dim_interns i
+    LEFT JOIN latest_lifecycle ll
+        ON i.intern_id = ll.intern_id
+       AND ll.rn = 1
+)
+SELECT
+    *,
+    LOWER(
+        REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(COALESCE(raw_status, ''))),
+            'Á', 'A'), 'É', 'E'), 'Í', 'I'), 'Ó', 'O'), 'Ú', 'U')
+    ) AS normalized_status,
+    CASE
+        WHEN LOWER(
+            REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(COALESCE(raw_status, ''))),
+                'Á', 'A'), 'É', 'E'), 'Í', 'I'), 'Ó', 'O'), 'Ú', 'U')
+        ) IN ('activo', 'active', 'st002') THEN 1
+        ELSE 0
+    END AS is_active,
+    CASE
+        WHEN LOWER(
+            REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(COALESCE(raw_status, ''))),
+                'Á', 'A'), 'É', 'E'), 'Í', 'I'), 'Ó', 'O'), 'Ú', 'U')
+        ) IN ('baja', 'inactivo', 'inactive') THEN 1
+        ELSE 0
+    END AS is_inactive,
+    CASE
+        WHEN contract_end_date IS NOT NULL
+         AND contract_end_date < CAST(SYSUTCDATETIME() AS DATE) THEN 1
+        ELSE 0
+    END AS is_contract_expired,
+    DATEDIFF(DAY, CAST(SYSUTCDATETIME() AS DATE), contract_end_date) AS days_until_contract_end,
+    TRY_CONVERT(DECIMAL(18,2),
+        REPLACE(REPLACE(REPLACE(CAST(salario_mensual AS NVARCHAR(100)), '$', ''), ',', ''), ' ', '')
+    ) AS importe_total
+FROM base;
+GO
+
+CREATE OR ALTER VIEW dbo.vw_powerbi_costos_practicantes AS
+SELECT
+    vp,
+    ubicacion_hc,
+    estado_ubicacion_hc,
+    cia_hc,
+    COUNT(*) AS practicante_count,
+    SUM(COALESCE(importe_total, 0)) AS importe_total_sum,
+    AVG(COALESCE(importe_total, 0)) AS importe_total_avg,
+    MIN(importe_total) AS importe_total_min,
+    MAX(importe_total) AS importe_total_max
+FROM dbo.vw_powerbi_interns_status
+WHERE is_active = 1
+GROUP BY vp, ubicacion_hc, estado_ubicacion_hc, cia_hc;
+GO
+
+CREATE OR ALTER VIEW dbo.vw_powerbi_expired_active_contracts AS
+SELECT
+    intern_id,
+    employee_number,
+    intern_name,
+    position_name,
+    manager,
+    vp,
+    ubicacion_hc,
+    estado_ubicacion_hc,
+    cia_hc,
+    oi_hc,
+    cc_hc,
+    start_date,
+    contract_end_date,
+    days_until_contract_end,
+    raw_status,
+    'Contrato vencido y sigue activo' AS alert_label
+FROM dbo.vw_powerbi_interns_status
+WHERE is_active = 1
+  AND is_contract_expired = 1;
+GO
+
+CREATE OR ALTER VIEW dbo.vw_powerbi_inactive_interns AS
+SELECT
+    intern_id,
+    employee_number,
+    intern_name,
+    position_name,
+    manager,
+    vp,
+    ubicacion_hc,
+    estado_ubicacion_hc,
+    cia_hc,
+    oi_hc,
+    cc_hc,
+    start_date,
+    contract_end_date,
+    raw_status,
+    latest_status_event_date
+FROM dbo.vw_powerbi_interns_status
+WHERE is_inactive = 1;
+GO
+
+CREATE OR ALTER VIEW dbo.vw_powerbi_vp_capacity AS
+WITH vp_capacity AS (
+    SELECT
+        vp,
+        allowed_practicantes,
+        UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(vp,
+            'Á', 'A'), 'É', 'E'), 'Í', 'I'), 'Ó', 'O'), 'Ú', 'U')) AS vp_key
+    FROM (VALUES
+        ('CONCRETO Y CONSTRUCCION', 130),
+        ('CADENA DE SUMINISTRO', 127),
+        ('OPERACIONES-TECNICA', 86),
+        ('SEGMENTO DISTRIBUCION', 51),
+        ('GLOBAL ENTERPRISE SERVICES', 50),
+        ('RECURSOS HUMANOS', 25),
+        ('SEGMENTO INDUSTRIAL', 23),
+        ('SEGURIDAD INDUSTRIAL Y BIENESTAR', 16),
+        ('ASUNTOS CORPORATIVOS, SOSTENIBILIDAD Y COMUNICACIÓN', 13),
+        ('LEGAL', 6),
+        ('PLANEACION', 3),
+        ('SUPPLY CHAIN', 2),
+        ('CEMENT OPERATIONS', 1),
+        ('PLANNING', 1),
+        ('PRESIDENCIA MEXICO', 1)
+    ) AS v(vp, allowed_practicantes)
+),
+active_counts AS (
+    SELECT
+        UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(vp,
+            'Á', 'A'), 'É', 'E'), 'Í', 'I'), 'Ó', 'O'), 'Ú', 'U')) AS vp_key,
+        COUNT(*) AS current_practicantes
+    FROM dbo.vw_powerbi_interns_status
+    WHERE is_active = 1
+    GROUP BY UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(vp,
+        'Á', 'A'), 'É', 'E'), 'Í', 'I'), 'Ó', 'O'), 'Ú', 'U'))
+)
+SELECT
+    c.vp,
+    c.allowed_practicantes,
+    COALESCE(a.current_practicantes, 0) AS current_practicantes,
+    c.allowed_practicantes - COALESCE(a.current_practicantes, 0) AS remaining_practicantes,
+    CASE
+        WHEN c.allowed_practicantes = 0 THEN NULL
+        ELSE CAST(COALESCE(a.current_practicantes, 0) AS DECIMAL(18,4))
+             / CAST(c.allowed_practicantes AS DECIMAL(18,4))
+    END AS utilization_pct,
+    CASE
+        WHEN COALESCE(a.current_practicantes, 0) > c.allowed_practicantes THEN 'Over capacity'
+        WHEN c.allowed_practicantes - COALESCE(a.current_practicantes, 0) <= 5 THEN 'Near full'
+        ELSE 'Available'
+    END AS capacity_status
+FROM vp_capacity c
+LEFT JOIN active_counts a
+    ON a.vp_key = c.vp_key;
 GO

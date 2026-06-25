@@ -27,7 +27,7 @@ Blob target:
 email_intake/@{triggerOutputs()?['body/id']}_@{items('Apply_to_each')?['name']}
 ```
 
-Once the blob is created, `intern-pipeline-dev` triggers from `raw-uploads/{name}`.
+Once the blob is created, `mex-intern-pipeline-func-win` triggers from `raw-uploads/{name}`.
 
 ## Common Error
 

@@ -53,6 +53,9 @@ def check_imports():
     print_section("Imports")
     modules = {
         "pipeline_service": require_import("pipeline_service"),
+        "onboarding_pipeline": require_import("onboarding_pipeline"),
+        "document_pipeline": require_import("document_pipeline"),
+        "requisition_parser": require_import("requisition_parser"),
         "flexible_file_classifier": require_import("flexible_file_classifier"),
         "lifecycle_requirements": require_import("lifecycle_requirements"),
         "matching_engine": require_import("matching_engine"),
@@ -397,6 +400,95 @@ def check_matching_engine(matching_engine):
     assert_true(conflict_match["conflict_reason"], "conflict reason exists")
 
 
+def check_org_relationship_enrichment(pipeline_service):
+    print_section("CEMEX Org Relationship Enrichment")
+
+    class FakeCursor:
+        def __init__(self):
+            self.results = []
+            self.intern_rows = [{
+                "jefe_inmediato": "Manager Uno",
+                "vp_hc": "VP Central",
+                "cc_hc": "3024178716",
+                "oi_hc": "88001234",
+                "cia_hc": "7180",
+            }]
+            self.manager_rows = [{
+                "jefe_key": pipeline_service.manager_key("Manager Uno"),
+                "jefe_directo": "Manager Uno",
+                "vp": "VP Central",
+                "cc": "3024178716",
+                "oi": "88001234",
+                "compania": "7180",
+            }]
+
+        def execute(self, sql, *params):
+            if "dim_manager_assignments" in sql and "SELECT CAST" in sql:
+                target = next(
+                    col for col in ["vp", "cc", "oi", "compania"]
+                    if f"CAST({col} AS" in sql
+                )
+                keys = set(params)
+                counts = {}
+                for row in self.manager_rows:
+                    if row["jefe_key"] in keys or pipeline_service.org_key(row["jefe_directo"]) in keys:
+                        value = row.get(target)
+                        if value:
+                            counts[value] = counts.get(value, 0) + 1
+                self.results = [(value, count) for value, count in counts.items()]
+                return self
+
+            if "FROM dbo.dim_interns" in sql:
+                select_sql, _, where_sql = sql.partition("FROM dbo.dim_interns")
+                target = next(
+                    col for col in ["jefe_inmediato", "vp_hc", "cc_hc", "oi_hc", "cia_hc"]
+                    if f"CAST({col} AS" in select_sql
+                )
+                source = next(
+                    col for col in ["jefe_inmediato", "vp_hc", "cc_hc", "oi_hc", "cia_hc"]
+                    if f"CAST({col} AS" in where_sql and col != target
+                )
+                keys = set(params)
+                counts = {}
+                for row in self.intern_rows:
+                    if pipeline_service.org_key(row.get(source)) in keys:
+                        value = row.get(target)
+                        if value:
+                            counts[value] = counts.get(value, 0) + 1
+                self.results = [(value, count) for value, count in counts.items()]
+                return self
+
+            self.results = []
+            return self
+
+        def fetchall(self):
+            return self.results
+
+    cursor = FakeCursor()
+    manager_enriched = pipeline_service.enrich_org_fields(cursor, {
+        "JefeInmediato": "Manager Uno",
+        "VP HC": "",
+        "CC HC": "",
+        "OI HC": "",
+        "CIA HC": "",
+    })
+    assert_equal(manager_enriched["VP HC"], "VP Central", "JefeInmediato -> VP HC")
+    assert_equal(manager_enriched["CC HC"], "3024178716", "JefeInmediato -> CC HC")
+    assert_equal(manager_enriched["OI HC"], "88001234", "JefeInmediato -> OI HC")
+    assert_equal(manager_enriched["CIA HC"], "7180", "JefeInmediato -> CIA HC")
+
+    oi_enriched = pipeline_service.enrich_org_fields(cursor, {
+        "OI HC": "88001234.0",
+        "VP HC": "",
+        "CC HC": "",
+        "CIA HC": "",
+    })
+    assert_equal(oi_enriched["OI HC"], "88001234", "OI HC numeric normalization")
+    assert_equal(oi_enriched["VP HC"], "VP Central", "OI HC -> VP HC")
+    assert_equal(oi_enriched["CC HC"], "3024178716", "OI HC -> CC HC")
+    assert_equal(oi_enriched["CIA HC"], "7180", "OI HC -> CIA HC")
+
+
 def check_sql_views_if_requested():
     if os.getenv("SMOKE_CHECK_SQL_VIEWS", "").strip().lower() not in {"1", "true", "yes"}:
         print("\nSQL view check skipped. Set SMOKE_CHECK_SQL_VIEWS=1 to run a read-only Azure SQL check.")
@@ -409,14 +501,29 @@ def check_sql_views_if_requested():
         "vw_pipeline_files",
         "vw_validation_errors",
         "vw_interns_current",
-        "vw_full_mvp_interns_current",
-        "vw_full_mvp_document_status",
-        "vw_full_mvp_missing_items",
-        "vw_full_mvp_lifecycle_events",
+        "vw_canonical_interns_current",
+        "vw_canonical_intern_documents",
+        "vw_canonical_document_types",
+        "vw_canonical_org_assignments",
+        "vw_canonical_requisitions",
+        "vw_canonical_pipeline_runs",
+        "vw_schema_consolidation_recommendations",
         "vw_business_validation_exceptions",
         "vw_requisitions_status",
         "vw_communications_status",
         "vw_hr_actions_today",
+        "vw_powerbi_vacantes",
+        "vw_powerbi_costos_practicantes",
+        "vw_powerbi_expired_active_contracts",
+        "vw_powerbi_inactive_interns",
+        "vw_powerbi_vp_capacity",
+        "vw_powerbi_dashboard_kpis",
+        "vw_powerbi_vp_summary",
+        "vw_powerbi_location_summary",
+        "vw_powerbi_contract_risk",
+        "vw_powerbi_document_status",
+        "vw_powerbi_document_summary",
+        "vw_powerbi_hr_action_queue",
     ]
 
     conn = azure_clients.get_sql_connection()
@@ -452,6 +559,7 @@ def main():
         pandas_module=modules["pandas"],
     )
     check_matching_engine(modules["matching_engine"])
+    check_org_relationship_enrichment(modules["pipeline_service"])
     check_sql_views_if_requested()
     print("\nSmoke test passed.")
 

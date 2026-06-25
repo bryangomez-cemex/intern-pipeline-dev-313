@@ -3,6 +3,7 @@ import sys
 import uuid
 import mimetypes
 import re
+import unicodedata
 from datetime import datetime, UTC, timedelta
 
 import pandas as pd
@@ -70,6 +71,59 @@ def clean_value(value):
             return None
 
     return value
+
+
+def clean_org_value(value):
+    value = clean_value(value)
+
+    if value is None:
+        return None
+
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+
+    if isinstance(value, int):
+        return str(value)
+
+    text = str(value).strip()
+
+    if re.fullmatch(r"\d+\.0", text):
+        return text[:-2]
+
+    return text or None
+
+
+def org_key(value):
+    value = clean_org_value(value)
+
+    if value is None:
+        return None
+
+    normalized = unicodedata.normalize("NFKD", value)
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+    return " ".join(normalized.lower().split())
+
+
+def org_value_variants(value):
+    value = clean_org_value(value)
+
+    if value is None:
+        return []
+
+    variants = {value, str(value).strip()}
+
+    if re.fullmatch(r"\d+", value):
+        variants.add(f"{value}.0")
+
+    if re.fullmatch(r"\d+\.0", value):
+        variants.add(value[:-2])
+
+    return sorted({org_key(variant) for variant in variants if org_key(variant)})
+
+
+def manager_key(value):
+    return org_key(value)
 
 
 def clean_date(value):
@@ -892,6 +946,46 @@ def insert_communication(
 # COMMUNICATION PREPARATION
 # ============================================================
 
+def resolve_group_recipients(cursor, recipient_group, fallback):
+    """
+    Resolve the active recipient email(s) for a fixed group (HR, Coparmex, ...)
+    from dim_email_recipients, joined by ';'. Falls back to the provided default
+    if the table has no active entry, so the pipeline keeps working safely until
+    the table is populated with real addresses.
+    """
+    try:
+        cursor.execute(
+            """
+            SELECT email
+            FROM dim_email_recipients
+            WHERE recipient_group = ?
+              AND active_flag = 1
+              AND email IS NOT NULL
+            ORDER BY recipient_id
+            """,
+            recipient_group,
+        )
+        emails = [row[0].strip() for row in cursor.fetchall() if row[0] and row[0].strip()]
+        if emails:
+            return ";".join(emails)
+    except Exception as resolve_error:
+        print(f"Recipient resolution failed for group {recipient_group}; using fallback. {resolve_error}")
+
+    return fallback
+
+
+def resolve_applicant_recipient(intern_email=None):
+    """
+    Applicant-facing email. Uses the intern's own email when available, otherwise
+    a single configurable inbox via DEV_EMAIL_OVERRIDE (e.g. an HR intake mailbox),
+    otherwise the safe dev placeholder. Per-applicant routing for batch files is a
+    future enhancement.
+    """
+    if intern_email and str(intern_email).strip():
+        return str(intern_email).strip()
+    return os.getenv("DEV_EMAIL_OVERRIDE") or "dev.intern@example.com"
+
+
 def prepare_correction_communication(
     cursor,
     source_file_id,
@@ -917,7 +1011,7 @@ def prepare_correction_communication(
         email_template_id="ET005",
         communication_type="Correction Needed",
         recipient_group="Intern / Applicant",
-        recipient_email="dev.intern@example.com",
+        recipient_email=resolve_applicant_recipient(),
         subject=subject,
         body=body,
         status="Prepared",
@@ -948,7 +1042,7 @@ def prepare_hr_package_communication(
         email_template_id="ET002",
         communication_type="HR Complete Package",
         recipient_group="HR",
-        recipient_email="dev.hr@example.com",
+        recipient_email=resolve_group_recipients(cursor, "HR", "dev.hr@example.com"),
         subject=subject,
         body=body,
         status="Prepared",
@@ -977,7 +1071,7 @@ def prepare_coparmex_package_communication(
         email_template_id="ET003",
         communication_type="Coparmex Package",
         recipient_group="Coparmex",
-        recipient_email="dev.coparmex@example.com",
+        recipient_email=resolve_group_recipients(cursor, "Coparmex", "dev.coparmex@example.com"),
         subject=subject,
         body=body,
         status="Prepared",
@@ -1008,7 +1102,7 @@ def prepare_intern_confirmation_communication(
         email_template_id="ET004",
         communication_type="Intern Confirmation",
         recipient_group="Intern / Applicant",
-        recipient_email="dev.intern@example.com",
+        recipient_email=resolve_applicant_recipient(),
         subject=subject,
         body=body,
         status="Prepared",
@@ -1209,16 +1303,42 @@ def has_stable_identifier(row):
     return any(clean_value(row.get(field_name)) for field_name in stable_fields)
 
 
-def validate_flexible_intern_row(row, process_type_id):
-    errors = validate_intern_row(row)
+def is_non_intern_summary_row(row, process_type_id):
+    if process_type_id not in {"current_intern_sync", "PROC_CURRENT_SYNC"}:
+        return False
 
-    if process_type_id in {"current_intern_sync", "PROC_CURRENT_SYNC"} and not has_stable_identifier(row):
-        errors.append((
-            "VR020",
-            "stable_identifier",
-            "No reliable identifier found for current intern row",
-            "Add employee number, CEMEX employee number, CURP, RFC, or NSS."
-        ))
+    if has_stable_identifier(row):
+        return False
+
+    return not any(
+        clean_value(row.get(field_name))
+        for field_name in ("NombreCompleto", "Nombre", "Paterno", "Materno", "Estatus")
+    )
+
+
+def validate_flexible_intern_row(row, process_type_id):
+    if process_type_id in {"current_intern_sync", "PROC_CURRENT_SYNC"}:
+        errors = []
+
+        if not has_stable_identifier(row):
+            errors.append((
+                "VR020",
+                "stable_identifier",
+                "No reliable identifier found for current intern row",
+                "Add employee number, CEMEX employee number, CURP, RFC, or NSS."
+            ))
+
+        if not clean_value(row.get("NombreCompleto")):
+            errors.append((
+                "VR001",
+                "NombreCompleto",
+                "Missing full name",
+                "Add the intern full name."
+            ))
+
+        return errors
+
+    errors = validate_intern_row(row)
 
     return errors
 
@@ -1267,10 +1387,256 @@ def log_error_report_file(cursor, report_file_id, report_file_name, report_blob_
 
 
 # ============================================================
+# CEMEX ORG RELATION ENRICHMENT
+# ============================================================
+
+ORG_FIELD_TO_DB_COLUMN = {
+    "JefeInmediato": "jefe_inmediato",
+    "VP HC": "vp_hc",
+    "CC HC": "cc_hc",
+    "OI HC": "oi_hc",
+    "CIA HC": "cia_hc",
+}
+
+ORG_RELATION_RULES = [
+    ("JefeInmediato", "VP HC", 100),
+    ("JefeInmediato", "CC HC", 100),
+    ("JefeInmediato", "OI HC", 100),
+    ("JefeInmediato", "CIA HC", 100),
+    ("OI HC", "VP HC", 90),
+    ("OI HC", "CC HC", 90),
+    ("OI HC", "CIA HC", 85),
+    ("CC HC", "VP HC", 80),
+    ("CC HC", "CIA HC", 80),
+    ("VP HC", "CIA HC", 70),
+    ("OI HC", "JefeInmediato", 60),
+    ("CC HC", "JefeInmediato", 50),
+]
+
+MANAGER_ASSIGNMENT_TARGETS = {
+    "VP HC": "vp",
+    "CC HC": "cc",
+    "OI HC": "oi",
+    "CIA HC": "compania",
+}
+
+
+def ensure_manager_assignments_table(cursor):
+    cursor.execute(
+        """
+        IF OBJECT_ID('dbo.dim_manager_assignments','U') IS NULL
+        CREATE TABLE dbo.dim_manager_assignments (
+          jefe_key NVARCHAR(300) NOT NULL PRIMARY KEY,
+          jefe_directo NVARCHAR(200) NULL,
+          vp NVARCHAR(200) NULL,
+          asesor_rh NVARCHAR(200) NULL,
+          ubicacion_udn NVARCHAR(200) NULL,
+          estado NVARCHAR(100) NULL,
+          compania NVARCHAR(200) NULL,
+          oi NVARCHAR(50) NULL,
+          cc NVARCHAR(50) NULL,
+          updated_at DATETIME2 DEFAULT SYSUTCDATETIME()
+        )
+        """
+    )
+
+
+def best_unique_candidate(candidates):
+    scores = {}
+    labels = {}
+
+    for value, count, strength in candidates:
+        value = clean_org_value(value)
+
+        if value is None:
+            continue
+
+        key = org_key(value)
+        score = (strength * 100000) + int(count or 1)
+        scores[key] = scores.get(key, 0) + score
+        labels.setdefault(key, value)
+
+    if not scores:
+        return None
+
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+
+    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+        return None
+
+    return labels[ranked[0][0]]
+
+
+def query_dim_intern_relation(cursor, source_field, source_value, target_field, strength):
+    source_column = ORG_FIELD_TO_DB_COLUMN[source_field]
+    target_column = ORG_FIELD_TO_DB_COLUMN[target_field]
+    variants = org_value_variants(source_value)
+
+    if not variants:
+        return []
+
+    placeholders = ", ".join("?" for _ in variants)
+    cursor.execute(
+        f"""
+        SELECT CAST({target_column} AS NVARCHAR(4000)) AS target_value,
+               COUNT(*) AS match_count
+        FROM dbo.dim_interns
+        WHERE {target_column} IS NOT NULL
+          AND LTRIM(RTRIM(CAST({target_column} AS NVARCHAR(4000)))) <> ''
+          AND LOWER(LTRIM(RTRIM(CAST({source_column} AS NVARCHAR(4000))))) IN ({placeholders})
+        GROUP BY CAST({target_column} AS NVARCHAR(4000))
+        """,
+        *variants,
+    )
+
+    return [(row[0], row[1], strength) for row in cursor.fetchall()]
+
+
+def query_manager_assignment_relation(cursor, source_field, source_value, target_field, strength):
+    if source_field != "JefeInmediato" or target_field not in MANAGER_ASSIGNMENT_TARGETS:
+        return []
+
+    target_column = MANAGER_ASSIGNMENT_TARGETS[target_field]
+    key = manager_key(source_value)
+    variants = org_value_variants(source_value)
+
+    if not key and not variants:
+        return []
+
+    clauses = []
+    params = []
+
+    if key:
+        clauses.append("jefe_key = ?")
+        params.append(key)
+
+    if variants:
+        placeholders = ", ".join("?" for _ in variants)
+        clauses.append(f"LOWER(LTRIM(RTRIM(CAST(jefe_directo AS NVARCHAR(4000))))) IN ({placeholders})")
+        params.extend(variants)
+
+    cursor.execute(
+        f"""
+        SELECT CAST({target_column} AS NVARCHAR(4000)) AS target_value,
+               COUNT(*) AS match_count
+        FROM dbo.dim_manager_assignments
+        WHERE {target_column} IS NOT NULL
+          AND LTRIM(RTRIM(CAST({target_column} AS NVARCHAR(4000)))) <> ''
+          AND ({" OR ".join(clauses)})
+        GROUP BY CAST({target_column} AS NVARCHAR(4000))
+        """,
+        *params,
+    )
+
+    return [(row[0], row[1], strength + 5) for row in cursor.fetchall()]
+
+
+def suggest_org_field(cursor, row, target_field):
+    candidates = []
+
+    for source_field, relation_target_field, strength in ORG_RELATION_RULES:
+        if relation_target_field != target_field:
+            continue
+
+        source_value = clean_org_value(row.get(source_field))
+
+        if not source_value:
+            continue
+
+        candidates.extend(query_manager_assignment_relation(
+            cursor,
+            source_field,
+            source_value,
+            target_field,
+            strength,
+        ))
+        candidates.extend(query_dim_intern_relation(
+            cursor,
+            source_field,
+            source_value,
+            target_field,
+            strength,
+        ))
+
+    return best_unique_candidate(candidates)
+
+
+def enrich_org_fields(cursor, row):
+    enriched = dict(row)
+    ensure_manager_assignments_table(cursor)
+
+    for field_name in ("JefeInmediato", "VP HC", "CC HC", "OI HC", "CIA HC"):
+        if clean_org_value(enriched.get(field_name)):
+            enriched[field_name] = clean_org_value(enriched.get(field_name))
+            continue
+
+        suggestion = suggest_org_field(cursor, enriched, field_name)
+
+        if suggestion:
+            enriched[field_name] = suggestion
+
+    return enriched
+
+
+def upsert_manager_assignment_from_row(cursor, row):
+    manager = clean_org_value(row.get("JefeInmediato"))
+    key = manager_key(manager)
+
+    if not manager or not key:
+        return
+
+    ensure_manager_assignments_table(cursor)
+
+    cursor.execute(
+        """
+        MERGE dbo.dim_manager_assignments AS target
+        USING (
+            SELECT
+                ? AS jefe_key,
+                ? AS jefe_directo,
+                ? AS vp,
+                ? AS asesor_rh,
+                ? AS ubicacion_udn,
+                ? AS estado,
+                ? AS compania,
+                ? AS oi,
+                ? AS cc
+        ) AS source
+        ON target.jefe_key = source.jefe_key
+        WHEN MATCHED THEN
+            UPDATE SET
+                jefe_directo = COALESCE(source.jefe_directo, target.jefe_directo),
+                vp = COALESCE(source.vp, target.vp),
+                asesor_rh = COALESCE(source.asesor_rh, target.asesor_rh),
+                ubicacion_udn = COALESCE(source.ubicacion_udn, target.ubicacion_udn),
+                estado = COALESCE(source.estado, target.estado),
+                compania = COALESCE(source.compania, target.compania),
+                oi = COALESCE(source.oi, target.oi),
+                cc = COALESCE(source.cc, target.cc),
+                updated_at = SYSUTCDATETIME()
+        WHEN NOT MATCHED THEN
+            INSERT (jefe_key, jefe_directo, vp, asesor_rh, ubicacion_udn, estado, compania, oi, cc)
+            VALUES (source.jefe_key, source.jefe_directo, source.vp, source.asesor_rh,
+                    source.ubicacion_udn, source.estado, source.compania, source.oi, source.cc);
+        """,
+        key,
+        manager,
+        clean_org_value(row.get("VP HC")),
+        clean_org_value(row.get("ASESOR RRHH HC")),
+        clean_org_value(row.get("UBICACIÓN HC")),
+        clean_org_value(row.get("ESTADO UBICACIÓN HC")),
+        clean_org_value(row.get("CIA HC")),
+        clean_org_value(row.get("OI HC")),
+        clean_org_value(row.get("CC HC")),
+    )
+
+
+# ============================================================
 # INTERN INSERT / UPDATE
 # ============================================================
 
 def insert_or_update_intern(cursor, row, intern_id_override=None):
+    row = enrich_org_fields(cursor, row)
     intern_id = intern_id_override or generate_intern_id(row)
 
     fecha_de_ingreso = clean_date(row.get("FechadeIngreso"))
@@ -1429,21 +1795,23 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
         clean_value(row.get("Carrera")),
         clean_value(row.get("Semestre")),
         clean_value(row.get("Puesto")),
-        clean_value(row.get("JefeInmediato")),
+        clean_org_value(row.get("JefeInmediato")),
         clean_value(row.get("UBICACIÓN HC")),
         clean_value(row.get("ESTADO UBICACIÓN HC")),
         clean_value(row.get("ASESOR RRHH HC")),
         clean_value(row.get("SalarioMensual")),
-        clean_value(row.get("CC HC")),
-        clean_value(row.get("VP HC")),
+        clean_org_value(row.get("CC HC")),
+        clean_org_value(row.get("VP HC")),
         clean_value(row.get("RegionRH")),
-        clean_value(row.get("OI HC")),
-        clean_value(row.get("CIA HC")),
+        clean_org_value(row.get("OI HC")),
+        clean_org_value(row.get("CIA HC")),
         clean_value(row.get("Area")),
         "ST002",
         fecha_de_ingreso,
         fecha_contrato_vence,
     )
+
+    upsert_manager_assignment_from_row(cursor, row)
 
     return intern_id
 
@@ -1713,17 +2081,31 @@ def append_missing_item_error(error_rows, file_id, file_name, row_number, intern
     })
 
 
+def validation_rule_id_for_missing_item(missing_item):
+    missing_type = (missing_item or {}).get("missing_type")
+    missing_code = (missing_item or {}).get("missing_code")
+
+    if missing_code == "DATE_ORDER":
+        return "VR005"
+    if missing_type == "BusinessRule":
+        return "VR009"
+    if missing_type == "Validation":
+        return "VR031"
+    if missing_type == "Document":
+        return "VR022"
+    return "VR001"
+
+
 def process_lifecycle_row(cursor, row, classification, run_id, file_id, row_number, process_type_id=None):
     process_type_id = process_type_id or classification["process_type_id"]
     row_errors = validate_flexible_intern_row(row, process_type_id)
     lifecycle_errors, lifecycle_alerts = validate_current_intern_lifecycle(row)
 
     if is_current_intern_profile(classification):
-        row_errors.extend(lifecycle_errors)
         matched_intern_id, match_message = find_matching_current_intern(cursor, row)
         intern_id = matched_intern_id or generate_intern_id(row)
 
-        if not matched_intern_id:
+        if not matched_intern_id and match_message != "No existing intern matched the stable identifiers.":
             row_errors.append((
                 "VR032",
                 "intern_match",
@@ -1764,28 +2146,44 @@ def process_lifecycle_row(cursor, row, classification, run_id, file_id, row_numb
 
             return matched_intern_id, row_errors, False
 
-        insert_or_update_intern(cursor, row, intern_id_override=matched_intern_id)
+        target_intern_id = matched_intern_id or intern_id
+        insert_or_update_intern(cursor, row, intern_id_override=target_intern_id)
 
         insert_lifecycle_event(
             cursor=cursor,
             run_id=run_id,
             file_id=file_id,
-            intern_id=matched_intern_id,
+            intern_id=target_intern_id,
             process_type_id=process_type_id,
             event_type="current_intern_sync",
-            event_status="Updated",
+            event_status="Updated" if matched_intern_id else "Created",
             source_row_number=row_number,
             new_status=clean_value(row.get("Estatus")),
-            message="Current intern record updated from sync file.",
+            message="Current intern record updated from sync file." if matched_intern_id else "Current intern record created from sync file.",
             needs_review=0
         )
+
+        for rule_id, field_name, message, suggested_fix in lifecycle_errors:
+            insert_lifecycle_event(
+                cursor=cursor,
+                run_id=run_id,
+                file_id=file_id,
+                intern_id=target_intern_id,
+                process_type_id=process_type_id,
+                event_type="current_intern_review",
+                event_status="Needs Review",
+                source_row_number=row_number,
+                new_status=clean_value(row.get("Estatus")),
+                message=message,
+                needs_review=1
+            )
 
         for event_type, event_status, message in lifecycle_alerts:
             insert_lifecycle_event(
                 cursor=cursor,
                 run_id=run_id,
                 file_id=file_id,
-                intern_id=matched_intern_id,
+                intern_id=target_intern_id,
                 process_type_id=process_type_id,
                 event_type=event_type,
                 event_status=event_status,
@@ -1795,7 +2193,7 @@ def process_lifecycle_row(cursor, row, classification, run_id, file_id, row_numb
                 needs_review=0
             )
 
-        return matched_intern_id, [], True
+        return target_intern_id, [], True
 
     intern_id = generate_intern_id(row)
 
@@ -1845,11 +2243,15 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
     if not AZURE_STORAGE_CONNECTION_STRING:
         raise ValueError("AZURE_STORAGE_CONNECTION_STRING is missing from .env")
 
-    if not SQL_SERVER:
-        raise ValueError("AZURE_SQL_SERVER is missing from .env")
+    # A full AZURE_SQL_CONNECTION_STRING (used by GitHub Actions) is self-sufficient
+    # and does not require the discrete server/database vars. Only require those when
+    # no connection string is provided (e.g. local Entra-token auth).
+    if not os.getenv("AZURE_SQL_CONNECTION_STRING"):
+        if not SQL_SERVER:
+            raise ValueError("AZURE_SQL_SERVER is missing from .env")
 
-    if not SQL_DATABASE:
-        raise ValueError("AZURE_SQL_DATABASE is missing from .env")
+        if not SQL_DATABASE:
+            raise ValueError("AZURE_SQL_DATABASE is missing from .env")
 
     run_id = generate_run_id()
     log_conn = get_sql_connection()
@@ -1995,6 +2397,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
 
         error_rows = []
         missing_items_count = 0
+        missing_error_count = 0
         processed_intern_ids = set()
         document_requirement_checks_enabled = False
         document_missing_items_affect_validation = True
@@ -2340,6 +2743,9 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                             )
 
                         row_process_type_id = classification["process_type_id"]
+                        if is_non_intern_summary_row(row_to_process, row_process_type_id):
+                            continue
+
                         missing_items = []
                         if not legacy_template_mode:
                             canonical_row = build_canonical_row(
@@ -2365,7 +2771,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                             intern_id = generate_intern_id(row_to_process)
                             row_errors = [
                                 (
-                                    missing_item["missing_type"],
+                                    validation_rule_id_for_missing_item(missing_item),
                                     missing_item["missing_code"],
                                     missing_item["missing_description"],
                                     "Provide the missing lifecycle requirement."
@@ -2386,6 +2792,8 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
 
                         for missing_item in missing_items:
                             missing_items_count += 1
+                            if missing_item["severity"] == "Error":
+                                missing_error_count += 1
 
                             lifecycle_requirements.log_missing_item(
                                 cursor=cursor,
@@ -2422,7 +2830,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                                     result="Failed",
                                     error_message=f"Row {row_number}: {message}",
                                     suggested_fix=suggested_fix,
-                                    intern_id=intern_id,
+                                    intern_id=None,
                                 )
 
                                 error_rows.append({
@@ -2445,7 +2853,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                     print(f"Good rows inserted/updated: {good_rows}")
                     print(f"Bad rows logged: {bad_rows}")
 
-                    if bad_rows > 0 or missing_items_count > 0:
+                    if bad_rows > 0 or missing_error_count > 0:
                         status_message = f"{bad_rows} rows failed validation."
 
                         if missing_items_count > 0:
@@ -2511,6 +2919,9 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                         row,
                         classification.get("detected_columns", [])
                     )
+                    if is_non_intern_summary_row(row_to_process, classification["process_type_id"]):
+                        continue
+
                     canonical_row = build_canonical_row(
                         row_to_process,
                         classification.get("detected_columns", [])
@@ -2533,7 +2944,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                         intern_id = generate_intern_id(row_to_process)
                         row_errors = [
                             (
-                                missing_item["missing_type"],
+                                validation_rule_id_for_missing_item(missing_item),
                                 missing_item["missing_code"],
                                 missing_item["missing_description"],
                                 "Provide the missing lifecycle requirement."
@@ -2554,6 +2965,8 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
 
                     for missing_item in missing_items:
                         missing_items_count += 1
+                        if missing_item["severity"] == "Error":
+                            missing_error_count += 1
 
                         lifecycle_requirements.log_missing_item(
                             cursor=cursor,
@@ -2590,7 +3003,9 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                                 result="Failed",
                                 error_message=f"Row {row_number}: {message}",
                                 suggested_fix=suggested_fix,
-                                intern_id=intern_id,
+                                # intern_id omitted: intern was never written to dim_interns
+                                # so passing it here would violate FK_fact_validations_intern
+                                intern_id=None,
                             )
 
                             error_rows.append({
@@ -2612,7 +3027,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                 print(f"Good rows inserted/updated: {good_rows}")
                 print(f"Bad rows logged: {bad_rows}")
 
-                if bad_rows > 0 or missing_items_count > 0:
+                if bad_rows > 0 or missing_error_count > 0:
                     status_message = f"{bad_rows} rows failed validation."
 
                     if missing_items_count > 0:
@@ -2718,6 +3133,8 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
 
                         if document_missing_items_affect_validation:
                             missing_items_count += 1
+                            if missing_document["severity"] == "Error":
+                                missing_error_count += 1
 
                             append_missing_item_error(
                                 error_rows=error_rows,
@@ -2728,14 +3145,14 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                                 missing_item=missing_document
                             )
 
-                if missing_items_count > 0:
+                if missing_error_count > 0:
                     update_file_status(
                         cursor=cursor,
                         file_id=file_id,
                         file_status_id="FS006",
                         validation_status="Validation Failed",
                         error_message=(
-                            f"{missing_items_count} lifecycle missing items detected."
+                            f"{missing_error_count} blocking lifecycle missing items detected."
                         ),
                     )
 
@@ -2747,7 +3164,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                         new_status_id="ST006",
                         changed_by="pipeline",
                         change_reason=(
-                            f"{missing_items_count} lifecycle missing items detected"
+                            f"{missing_error_count} blocking lifecycle missing items detected"
                         )
                     )
 
@@ -2865,7 +3282,11 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                 print("Communication package metadata could not be prepared:")
                 print(package_error)
 
-        validation_passed = len(error_rows) == 0
+        blocking_error_rows = [
+            error_row for error_row in error_rows
+            if error_row.get("severity", "Error") == "Error"
+        ]
+        validation_passed = bad_rows == 0 and missing_error_count == 0 and len(blocking_error_rows) == 0
         validation_result = "Validation Passed" if validation_passed else "Validation Failed"
         processed_blob_status = "Processed" if validation_passed else "Validation Failed"
 
@@ -3070,7 +3491,82 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
         log_conn.close()
 
 
+def _try_onboarding_route(source_container, source_blob_name, run_type):
+    """If the blob is a requisición (.docx) or a candidate alta (.xlsx), process it
+    through the onboarding pipeline and archive it. Returns a result dict when it
+    handled the file, or None so the caller falls back to the intern-data pipeline.
+    Centralized here so BOTH the Function App (Event Grid) and the cron route the
+    same way."""
+    import os as _os
+    import tempfile as _tempfile
+
+    ext = _os.path.splitext(source_blob_name or "")[1].lower()
+    if ext not in (".docx", ".xlsx", ".pdf", ".png", ".jpg", ".jpeg"):
+        return None
+
+    try:
+        import onboarding_pipeline
+        import document_pipeline
+
+        blob_client = get_blob_service_client().get_blob_client(
+            container=source_container, blob=source_blob_name
+        )
+        metadata = (blob_client.get_blob_properties().metadata) or {}
+
+        with _tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp.write(blob_client.download_blob().readall())
+            local_path = tmp.name
+    except Exception as setup_error:
+        print(f"Onboarding pre-check skipped ({source_blob_name}): {setup_error}")
+        return None
+
+    meta = {
+        "sender_email": metadata.get("sender_email"),
+        "requisition_id": metadata.get("requisition_id") or None,
+        "email_subject": metadata.get("email_subject"),
+        "body_fields": metadata.get("body_fields"),
+        "source_container": source_container,
+        "source_blob": source_blob_name,
+    }
+
+    try:
+        kind = onboarding_pipeline.classify_document(local_path, source_blob_name)
+
+        if kind in ("requisicion", "alta_candidate", "hr_new_hires"):
+            try:
+                result = onboarding_pipeline.process_onboarding_file(local_path, source_blob_name, meta=meta)
+            except Exception as processing_error:
+                print(f"Onboarding processing failed for {source_blob_name}: {processing_error}")
+                return {"type": "onboarding", "status": "error",
+                        "source_blob_name": source_blob_name, "error": str(processing_error)}
+        else:
+            # documents (candidate package, convenio, signed) — stages C–E
+            try:
+                result = document_pipeline.process_document(local_path, source_blob_name, meta=meta)
+            except Exception as doc_error:
+                print(f"Document processing failed for {source_blob_name}: {doc_error}")
+                return {"type": "document", "status": "error",
+                        "source_blob_name": source_blob_name, "error": str(doc_error)}
+            if result is None:
+                return None  # not an onboarding document — use the normal pipeline
+
+        try:
+            archive_processed_blob(source_container, source_blob_name, success=True)
+        except Exception as archive_error:
+            print(f"Onboarding archive note: {archive_error}")
+        return result
+    finally:
+        try:
+            _os.unlink(local_path)
+        except OSError:
+            pass
+
+
 def process_blob_by_name(source_container, source_blob_name, run_type="manual"):
+    routed = _try_onboarding_route(source_container, source_blob_name, run_type)
+    if routed is not None:
+        return routed
+
     return _process_blob(
         source_container_name=source_container,
         source_blob_name=source_blob_name,

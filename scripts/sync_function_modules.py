@@ -10,10 +10,13 @@ MODULES_TO_COPY = [
     "app_config.py",
     "azure_clients.py",
     "communication_packager.py",
+    "document_pipeline.py",
     "flexible_file_classifier.py",
     "lifecycle_requirements.py",
     "matching_engine.py",
+    "onboarding_pipeline.py",
     "pipeline_service.py",
+    "requisition_parser.py",
 ]
 
 

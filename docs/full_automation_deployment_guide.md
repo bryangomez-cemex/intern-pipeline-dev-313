@@ -18,9 +18,13 @@ Run in Azure Query Editor:
 
 ```text
 scripts/sql/create_full_mvp_pipeline.sql
+scripts/sql/2026-06_package1_document_requirements.sql
+scripts/sql/create_business_powerbi_views.sql
+scripts/sql/2026-06_schema_simplification.sql
+scripts/sql/2026-06_powerbi_no_dax_views.sql
 ```
 
-Power BI should read the `vw_full_mvp_*` views, not raw operational tables.
+Power BI should read the `vw_powerbi_*` and `vw_canonical_*` views, not raw operational tables. Legacy `vw_full_mvp_*` views remain available only for compatibility and deep audit detail.
 
 ## Azure Function
 

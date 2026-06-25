@@ -56,6 +56,7 @@ IF COL_LENGTH('dim_interns','fecha_graduacion') IS NULL ALTER TABLE dim_interns 
 IF COL_LENGTH('dim_interns','hr_list_matched') IS NULL ALTER TABLE dim_interns ADD hr_list_matched BIT NULL;
 IF COL_LENGTH('dim_interns','apodo') IS NULL ALTER TABLE dim_interns ADD apodo NVARCHAR(100) NULL;
 IF COL_LENGTH('dim_interns','linkedin') IS NULL ALTER TABLE dim_interns ADD linkedin NVARCHAR(300) NULL;
+IF COL_LENGTH('dim_interns','contacto_emergencia') IS NULL ALTER TABLE dim_interns ADD contacto_emergencia NVARCHAR(500) NULL;
 IF COL_LENGTH('dim_interns','documents_status') IS NULL ALTER TABLE dim_interns ADD documents_status NVARCHAR(40) NULL;
 IF COL_LENGTH('dim_interns','convenio_status') IS NULL ALTER TABLE dim_interns ADD convenio_status NVARCHAR(40) NULL;
 

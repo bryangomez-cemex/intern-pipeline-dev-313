@@ -6,7 +6,7 @@ Manual Azure setup required for deployed Function SQL auth.
 
 In Azure Portal:
 
-- Function App: `intern-pipeline-dev`
+- Function App: `mex-intern-pipeline-func-win`
 - Identity
 - System assigned
 - Status: On
@@ -17,7 +17,7 @@ In Azure Portal:
 Connect to Azure SQL database `intern_system_dev` as an Entra admin, then run:
 
 ```sql
-CREATE USER [intern-pipeline-dev] FROM EXTERNAL PROVIDER;
+CREATE USER [mex-intern-pipeline-func-win] FROM EXTERNAL PROVIDER;
 ```
 
 If the name is already used, skip this command.
@@ -27,8 +27,8 @@ If the name is already used, skip this command.
 For the local-first MVP, grant read/write permissions on existing pipeline tables and views:
 
 ```sql
-ALTER ROLE db_datareader ADD MEMBER [intern-pipeline-dev];
-ALTER ROLE db_datawriter ADD MEMBER [intern-pipeline-dev];
+ALTER ROLE db_datareader ADD MEMBER [mex-intern-pipeline-func-win];
+ALTER ROLE db_datawriter ADD MEMBER [mex-intern-pipeline-func-win];
 ```
 
 If you want the Function to run setup scripts later, also grant DDL permissions, but the preferred MVP flow is to run SQL scripts manually in Query Editor.
