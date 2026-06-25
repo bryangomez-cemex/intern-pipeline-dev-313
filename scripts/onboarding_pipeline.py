@@ -29,13 +29,37 @@ import requisition_parser
 
 load_dotenv()
 
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USERNAME = os.getenv("SMTP_USERNAME")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL") or SMTP_USERNAME
-DEV_EMAIL_OVERRIDE = os.getenv("DEV_EMAIL_OVERRIDE")
-SEND_EMAILS = os.getenv("SEND_EMAILS", "false").strip().lower() == "true"
+import email_service
+
+# Fixed RH recipients for HR notifications. COPARMEX currently uses a placeholder.
+# Practicantes usually have CEMEX emails; new hires may still use personal emails
+# until their CEMEX account exists.
+RH_RECIPIENT_EMAILS = os.getenv("RH_RECIPIENT_EMAILS", "")
+COPARMEX_RECIPIENT_EMAILS = os.getenv("COPARMEX_RECIPIENT_EMAILS", "")
+
+
+def _parse_emails(value):
+    """Comma-separated env list → cleaned list of emails (trim, drop empties)."""
+    return [e.strip() for e in (value or "").split(",") if e.strip()]
+
+
+def _text_to_html(text):
+    """Minimal plain-text → HTML so existing newline-formatted bodies render."""
+    import html as _html
+    return "<html><body style=\"font-family:Arial,sans-serif\">" \
+           + _html.escape(str(text or "")).replace("\n", "<br>") + "</body></html>"
+
+
+def resolve_person_email(personal_email, cemex_email, person_type="new_hire"):
+    """Pick the right recipient address by person/process type.
+    - practicante/intern: prefer the CEMEX (institutional) email.
+    - new hire / alta / contratacion: prefer the personal email.
+    Falls back to the other valid field when the preferred one is missing.
+    """
+    prefer_cemex = str(person_type or "").lower() in ("practicante", "intern", "current_intern")
+    primary = cemex_email if prefer_cemex else personal_email
+    secondary = personal_email if prefer_cemex else cemex_email
+    return (primary or "").strip() or (secondary or "").strip() or None
 
 CURP_RE = re.compile(r"^[A-Z]{4}[0-9]{6}[HM][A-Z]{5}[0-9A-Z][0-9]$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -258,38 +282,27 @@ def validate_candidate(fields, requisicion=None):
 
 
 # ============================================================
-# email (dev-safe: all mail routed to DEV_EMAIL_OVERRIDE)
+# email — delegates to the Azure Communication Services service
 # ============================================================
 
-def send_email(intended_to, subject, body, attachments=None):
-    target = DEV_EMAIL_OVERRIDE or intended_to
-    attachments = attachments or []
-    if not SEND_EMAILS:
-        extra = f" + {len(attachments)} attachment(s)" if attachments else ""
-        print(f"[SIMULATED EMAIL] to={intended_to} (routed {target}) subj={subject}{extra}")
-        return {"status": "simulated", "to": target}
-    msg = EmailMessage()
-    msg["From"] = SMTP_FROM_EMAIL
-    msg["To"] = target
-    msg["Subject"] = f"[DEV] {subject}"
-    msg.set_content(
-        f"DEV TEST — intended recipient: {intended_to}\n"
-        f"(routed to {target} for safety)\n\n{body}\n"
+def send_email(intended_to, subject, body, attachments=None, to_name=None, cc=None, metadata=None):
+    """Thin wrapper over email_service (ACS). Keeps the existing call sites:
+    plain-text bodies are converted to HTML; attachments are passed through
+    (ACS attachment send is TODO in email_service)."""
+    if not intended_to:
+        return {"status": "failed", "provider": email_service.PROVIDER, "error": "missing recipient"}
+    result = email_service.send_email(
+        to_email=intended_to,
+        subject=subject,
+        html_body=_text_to_html(body),
+        to_name=to_name,
+        cc=cc,
+        attachments=attachments,
+        metadata=metadata,
     )
-    for path in attachments:
-        try:
-            with open(path, "rb") as fh:
-                data = fh.read()
-            msg.add_attachment(data, maintype="application", subtype="octet-stream",
-                               filename=os.path.basename(path))
-        except Exception as att_err:
-            print(f"attachment skipped ({path}): {att_err}")
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
-        s.ehlo(); s.starttls(); s.ehlo()
-        s.login(SMTP_USERNAME, SMTP_PASSWORD)
-        s.send_message(msg)
-    print(f"[EMAIL SENT] to={intended_to} (routed {target}) subj={subject}")
-    return {"status": "sent", "to": target}
+    note = f" + {len(attachments)} attachment(s)" if attachments else ""
+    print(f"[EMAIL] to={intended_to} subj={subject!r} -> {result.get('status')}{note}")
+    return result
 
 
 def _return_to_sender(sender_email, what, reasons):
@@ -637,13 +650,14 @@ def _create_candidate_from_hr(cur, hr_row):
 
 def send_pack1(cur, intern_id):
     """Paquete 1: ask the new hire for data + documents, attach the alta format."""
-    cur.execute("SELECT nombre, nombre_completo, email_personal FROM dim_interns WHERE intern_id=?", intern_id)
+    cur.execute("SELECT nombre, nombre_completo, email_personal, correo_institucional FROM dim_interns WHERE intern_id=?", intern_id)
     r = cur.fetchone()
     if not r:
         return
     name = r[0] or (r[1].split()[0] if r[1] else "practicante")
+    to_email = resolve_person_email(r[2], r[3], person_type="new_hire")  # new hires prefer personal
     tmpl, is_temp = _get_alta_template()
-    send_email(r[2] or "candidate",
+    send_email(to_email or "candidate",
                "¡Te damos la bienvenida a Cemex! Paquete 1 – Summer Internship Program",
                f"¡Hola {name}! Estamos iniciando tu proceso de ingreso.\n\n"
                "Por favor RESPONDE a este correo con tus datos:\n"
@@ -720,18 +734,22 @@ COPARMEX_REQUIRED_FROM_HR = [
 
 
 def _resolve_recipients(cursor):
-    out = {"HR": None, "Coparmex": None}
+    """RH/Coparmex notification recipients. Prefer the env lists
+    (RH_RECIPIENT_EMAILS / COPARMEX_RECIPIENT_EMAILS); fall back to the
+    dim_email_recipients table if an env list is not configured."""
+    out = {"HR": _parse_emails(RH_RECIPIENT_EMAILS), "Coparmex": _parse_emails(COPARMEX_RECIPIENT_EMAILS)}
     try:
         cursor.execute(
             "SELECT recipient_group, email FROM dim_email_recipients "
             "WHERE active_flag = 1 AND recipient_group IN ('HR','Coparmex')"
         )
         for group, email in cursor.fetchall():
-            if email:
-                out[group] = (out[group] + ";" + email) if out[group] else email
+            if email and not out.get(group):
+                out[group] = (out.get(group) or []) + [email]
     except Exception as e:
         print("recipient resolve note:", e)
-    return out
+    # Collapse to a ';'-joined string (or None) for the existing call sites.
+    return {g: (";".join(v) if v else None) for g, v in out.items()}
 
 
 def build_coparmex_package(requisicion, candidate, hr_data=None):

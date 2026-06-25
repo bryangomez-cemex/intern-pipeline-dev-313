@@ -199,3 +199,28 @@ The legacy `vw_full_mvp_*` views remain available for compatibility, but new rep
 - Power BI Service setup without DAX/Desktop: `docs/power_bi_no_dax_5_pages.md`
 - Email alert recommendations: `docs/email_alert_recommendations.md`
 - Schema simplification notes: `docs/schema_simplification.md`
+
+## Email (Azure Communication Services)
+
+Email from step 5 onward uses **Azure Communication Services** (no Microsoft Graph,
+no SMTP), via `scripts/email_service.py` (`send_email(...)`). `onboarding_pipeline.send_email`
+delegates to it. Config is read only from environment variables — set these locally
+(`.env`) and in the **Azure Function App → Settings → Environment variables / Application
+settings**:
+
+```
+EMAIL_PROVIDER=azure_communication_services
+EMAIL_SIMULATION_MODE=true      # safe default; false to send for real
+ACS_CONNECTION_STRING=...
+ACS_SENDER_EMAIL=...
+ACS_SENDER_NAME=Intern Pipeline
+TEST_EMAIL_TO=...
+RH_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com,valeria.acunaam@cemex.com
+COPARMEX_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com
+```
+
+`RH_RECIPIENT_EMAILS` are fixed internal recipients for HR notifications.
+`COPARMEX_RECIPIENT_EMAILS` currently uses a placeholder. Practicantes usually use
+CEMEX emails, while new hires may still use personal emails until their CEMEX account
+exists — `resolve_person_email()` picks the correct field by person/process type.
+Test locally with `python scripts/test_acs_email.py`.
