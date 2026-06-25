@@ -1,7 +1,7 @@
 # Intern System Pipeline Technical Manual
 
-Version: 2026-06-24  
-Environment documented: Azure dev/staging resources used for the CEMEX intern automation pipeline  
+Version: 2026-06-25  
+Environment documented: Azure dev resources used for the CEMEX intern automation pipeline  
 Repository: `/Users/bryangomezcemex/intern-system-pipeline`
 
 ## 1. Purpose
@@ -20,7 +20,7 @@ The intended business flow is:
 Short architecture:
 
 ```text
-Email / Gmail intake / future Outlook Graph
+Email intake / Gmail dev intake / manual Azure upload
     -> Azure Blob Storage raw-uploads
     -> Azure Function blob trigger
     -> Python pipeline
@@ -33,10 +33,15 @@ Email / Gmail intake / future Outlook Graph
 
 ### Cloud
 
-- Azure Resource Group: `rg-intern-system-dev`
+- Azure Subscription: `Azure subscription 1`
+- Azure Subscription ID: `a3d54e37-bfef-4efb-8f09-f6d848b499c7`
+- Azure Tenant ID: `6ee19001-d0c4-45f8-af8b-ff00f16d07e1`
+- Azure Resource Group: `rg-intern-pipeline-dev`
 - Azure Function App: `mex-intern-pipeline-func-win`
-- Azure SQL Server: `rg-intern-system-dev`
-- Azure SQL Database: configured through app settings / `.env`
+- Azure Function Host: `mex-intern-pipeline-func-win-axgkagdsdgfbebc6.centralus-01.azurewebsites.net`
+- Azure SQL Server: `rg-intern-system-devbge.database.windows.net`
+- Azure SQL Database: `rg-intern-system-dev`
+- Azure Storage Account: `rginternpipelinedevb961`
 - Azure Blob Storage containers:
   - `raw-uploads`
   - `error-reports`
@@ -64,7 +69,7 @@ Email / Gmail intake / future Outlook Graph
 - Workspace: `/Users/bryangomezcemex/intern-system-pipeline`
 - Python virtual environment: `.venv`
 - Local config: `.env` is ignored by git and must never be committed.
-- Git branch at time of manual: `main`
+- Git branch at time of manual: `codex/intern-pipeline-production-readiness`
 
 ## 3. Repository Layout
 
@@ -101,13 +106,17 @@ scripts/
   deployment_readiness_e2e.py
   check_function_readiness.py
   sql/
+    00_create_core_legacy_tables.sql
+    00_create_dim_interns.sql
     create_full_mvp_pipeline.sql
+    fix_file_id_source_file_id_compatibility.sql
     seed_pipeline_validation_rules.sql
     2026-06_package1_document_requirements.sql
     2026-06_resolve_stale_missing_items.sql
     add_corporate_column_aliases.sql
     create_matching_engine_v1.sql
     create_business_powerbi_views.sql
+    2026-06_onboarding_schema.sql
     2026-06_schema_simplification.sql
     2026-06_powerbi_no_dax_views.sql
 
@@ -163,12 +172,15 @@ ERROR_REPORTS_CONTAINER=error-reports
 ARCHIVE_CONTAINER=archive
 AZURE_SQL_SERVER
 AZURE_SQL_DATABASE
-AZURE_SQL_AUTH_MODE=managed_identity
+AZURE_SQL_CONNECTION_STRING
+AZURE_SQL_AUTH_MODE=sql_password or managed_identity
 EMAIL_MODE=simulation
+SEND_EMAILS=false
 DEV_EMAIL_OVERRIDE
 DOC_INTEL_ENDPOINT
 DOC_INTEL_KEY
 AzureWebJobsFeatureFlags=EnableWorkerIndexing
+ENABLE_ADMIN_SQL_SETUP=false
 ```
 
 Optional/future email settings:
@@ -182,6 +194,31 @@ EMAIL_MODE=graph_draft or graph_send
 ```
 
 Keep `EMAIL_MODE=simulation` until real recipient approval is complete.
+
+### SQL Setup For Fresh Azure Databases
+
+For a new empty Azure SQL database, run scripts in this order:
+
+```text
+scripts/sql/00_create_core_legacy_tables.sql
+scripts/sql/00_create_dim_interns.sql
+scripts/sql/create_full_mvp_pipeline.sql
+scripts/sql/fix_file_id_source_file_id_compatibility.sql
+scripts/sql/seed_pipeline_validation_rules.sql
+scripts/sql/2026-06_package1_document_requirements.sql
+scripts/sql/2026-06_resolve_stale_missing_items.sql
+scripts/sql/add_corporate_column_aliases.sql
+scripts/sql/create_matching_engine_v1.sql
+scripts/sql/create_business_powerbi_views.sql
+scripts/sql/2026-06_onboarding_schema.sql
+scripts/sql/2026-06_schema_simplification.sql
+scripts/sql/2026-06_powerbi_no_dax_views.sql
+```
+
+The `00_*` scripts create base compatibility tables that the older environment
+already had but a brand-new database does not. Azure SQL setup was verified on
+2026-06-25 with 30 dbo tables, 41 dbo views, and all required `vw_powerbi_*`
+views present.
 
 ## 5. Blob Storage Contract
 

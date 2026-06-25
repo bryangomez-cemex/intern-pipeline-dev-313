@@ -1,6 +1,6 @@
 # Intern System Pipeline
 
-Fake-data-first MVP for an automated intern/practicante lifecycle pipeline.
+Automated intern/practicante lifecycle pipeline for CEMEX HR.
 
 The pipeline supports:
 
@@ -8,11 +8,11 @@ The pipeline supports:
 - Accepted new hires: Excel/CSV intake, intern record creation/update, missing data/document detection, correction requests, HR/Coparmex/applicant package metadata.
 - Current interns: Excel/CSV sync, active/inactive/baja detection, upcoming expiration alerts, missing/expired document checks, and Power BI-ready reporting.
 
-Do not upload real personal data. Use fake intern names, fake emails, fake identifiers, and dev-only mailboxes.
+Keep email sending disabled until corporate Graph/SMTP approval is complete.
 
 ## Architecture
 
-Outlook, Power Automate, Power Apps, Gmail dev intake, or local upload drops files into Azure Blob `raw-uploads`.
+Email intake, Gmail dev intake, Azure/manual upload, or local upload drops files into Azure Blob `raw-uploads`.
 
 Processing paths:
 
@@ -30,25 +30,27 @@ All paths call `scripts/pipeline_service.py`, which writes Azure SQL records, cr
 
 ## Main Setup
 
-Run these SQL scripts in Azure Query Editor:
+For a fresh Azure SQL database, run these SQL scripts in this order:
 
 ```text
-scripts/sql/fix_file_id_source_file_id_compatibility.sql
+scripts/sql/00_create_core_legacy_tables.sql
+scripts/sql/00_create_dim_interns.sql
 scripts/sql/create_full_mvp_pipeline.sql
+scripts/sql/fix_file_id_source_file_id_compatibility.sql
 scripts/sql/seed_pipeline_validation_rules.sql
 scripts/sql/2026-06_package1_document_requirements.sql
 scripts/sql/2026-06_resolve_stale_missing_items.sql
 scripts/sql/add_corporate_column_aliases.sql
 scripts/sql/create_matching_engine_v1.sql
 scripts/sql/create_business_powerbi_views.sql
+scripts/sql/2026-06_onboarding_schema.sql
 scripts/sql/2026-06_schema_simplification.sql
 scripts/sql/2026-06_powerbi_no_dax_views.sql
 ```
 
-Run the compatibility script first when an older dev database already exists. It
-does not drop tables or data; it only adds safe missing columns and recreates
-legacy views such as `vw_pipeline_summary`, `vw_pipeline_files`,
-`vw_validation_errors`, and `vw_communications_status`.
+For an older dev database that already has base tables, the compatibility script
+can be run before or after `create_full_mvp_pipeline.sql`; for a new empty
+database, run the two `00_*` scripts first.
 
 Required local `.env` values:
 
@@ -61,12 +63,13 @@ AZURE_SQL_SERVER=...
 AZURE_SQL_DATABASE=intern_system_dev
 AZURE_SQL_AUTH_MODE=interactive
 EMAIL_MODE=simulation
+SEND_EMAILS=false
 DEV_EMAIL_OVERRIDE=dev-only@example.com
 DOC_INTEL_ENDPOINT=...
 DOC_INTEL_KEY=...
 ```
 
-`EMAIL_MODE=simulation` is the safe default.
+`EMAIL_MODE=simulation` and `SEND_EMAILS=false` are the safe defaults.
 
 ## Local Commands
 
@@ -179,6 +182,13 @@ Load these Azure SQL views:
 - `vw_powerbi_expired_active_contracts`
 - `vw_powerbi_inactive_interns`
 - `vw_powerbi_vp_capacity`
+- `vw_powerbi_dashboard_kpis`
+- `vw_powerbi_vp_summary`
+- `vw_powerbi_location_summary`
+- `vw_powerbi_contract_risk`
+- `vw_powerbi_document_status`
+- `vw_powerbi_document_summary`
+- `vw_powerbi_hr_action_queue`
 
 The legacy `vw_full_mvp_*` views remain available for compatibility, but new reporting should prefer `vw_powerbi_*` for requested HR pages and `vw_canonical_*` for shared entities.
 
