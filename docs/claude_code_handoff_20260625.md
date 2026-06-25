@@ -1,37 +1,27 @@
-# Claude Code Handoff - Changes Made In This Chat
+# Changes Made By Codex In This Chat
 
 Date: 2026-06-25  
 Repo: `/Users/bryangomezcemex/intern-system-pipeline`  
 Branch: `codex/intern-pipeline-production-readiness`
 
-This file is a changes-only handoff. It is not an explanation of the whole
-system. The system already existed and had worked before this chat. The notes
-below only summarize what Codex changed, configured, verified, or documented
-during this specific conversation.
-
-Do not print secrets. Do not enable real email sending unless Bryan explicitly
-asks.
-
-## Git Commits Created During This Chat
+## Commits Created
 
 - `d84ca23 Implement intern pipeline production readiness`
 - `e9f003b Add baja transition communications`
 - `eeef3c8 Add fresh Azure SQL setup support`
 - `a9aedc8 Document Claude handoff and fresh Azure setup`
 - `b3abc8c Clarify Claude handoff scope`
+- `c1e4083 Make Claude handoff changes-only`
 
-## Business Logic Changes
+## Package 1
 
-### Package 1 Requirements
+Changed Package 1 requirements:
 
-Changed Package 1 rules to match Bryan's updated HR requirement:
-
-- Use the Spanish label `Paquete 1`.
-- Professional photo is no longer required.
-- `COMPROBANTE_DOMICILIO` is now required.
-- Emergency contact is expected to be captured from email/body text when
-  available.
-- Package 1 required documents are now aligned around:
+- Renamed/displayed as `Paquete 1`.
+- Removed professional photo requirement.
+- Added `COMPROBANTE_DOMICILIO` as required.
+- Added support for emergency contact captured from email/body text.
+- Package 1 required documents aligned to:
   - `ALTA`
   - `CURP`
   - `CONSTANCIA_ESTUDIOS`
@@ -42,9 +32,9 @@ Related SQL:
 
 - `scripts/sql/2026-06_package1_document_requirements.sql`
 
-### CEMEX HR Relationship Matching
+## CEMEX HR Relationship Matching
 
-Added/implemented relationship logic for these fields:
+Added relationship logic for:
 
 - `CIA HC`
 - `VP HC`
@@ -58,7 +48,7 @@ Main hierarchy:
 CIA HC -> VP HC -> CC HC -> OI HC
 ```
 
-Strongest relation signals:
+Strong relationship signals added:
 
 - `JefeInmediato -> VP HC`
 - `JefeInmediato -> CC HC`
@@ -69,11 +59,8 @@ Strongest relation signals:
 - `CC HC -> VP HC`
 - `CC HC -> CIA HC`
 
-Behavior requested by Bryan:
-
-- If one of these fields is empty, infer/fill it using the strongest available
-  relation for that row.
-- Use historical intern data and manager assignment data as matching signals.
+The matching logic uses existing intern rows and manager assignment rows to fill
+or suggest missing organization fields.
 
 Related files:
 
@@ -83,39 +70,34 @@ Related files:
 - `azure_function_app/scripts/matching_engine.py`
 - `scripts/sql/create_matching_engine_v1.sql`
 
-### Sequential ID Concurrency Safety
+## Sequential IDs
 
-Changed sequential ID generation to be safer for parallel triggers by using SQL
-application locks around prefix-based sequential ID creation.
-
-Intent:
-
-- Avoid duplicate sequential IDs when several files/events run at the same time.
-- Keep existing ID style while reducing race-condition risk.
+Changed sequential ID creation to use SQL application locks around prefix-based
+ID generation.
 
 Related files:
 
 - `scripts/pipeline_service.py`
 - `azure_function_app/scripts/pipeline_service.py`
 
-### Baja Automation
+## Baja Automation
 
 Added baja transition handling.
 
-Behavior:
+Behavior added:
 
-- Detect when an intern changes from active/activo/ST002 to inactive/baja.
-- Reflect the status change so the intern stops appearing as active.
-- Create a lifecycle event for the baja.
-- Prepare an HR communication for the baja process.
+- Detect active/activo/ST002 to inactive/baja transitions.
+- Update lifecycle/status handling so baja interns no longer count as active.
+- Create baja lifecycle events.
+- Prepare an HR baja communication.
 
-Prepared HR email subject:
+Prepared email subject:
 
 ```text
 Baja De Practicante - [NOMBRE DE PRACTICANTE]
 ```
 
-Prepared HR email body fields:
+Prepared email body fields:
 
 - Fecha de nacimiento
 - Correo personal
@@ -139,8 +121,6 @@ Prepared HR email body fields:
 - Estado de practicante
 - Nombre completo
 
-Real email sending remains off unless Bryan explicitly enables it.
-
 Related files:
 
 - `scripts/pipeline_service.py`
@@ -149,78 +129,54 @@ Related files:
 - `docs/email_alert_recommendations.md`
 - `docs/technical_manual.md`
 
-### Expired Active Contracts Report
+## Expired Active Contracts Report
 
-Added a script to prepare/send a report of active interns with expired
-contracts.
-
-Related file:
+Added a script for active interns with expired contracts:
 
 - `scripts/send_expired_active_contracts_email.py`
 
-Important:
+## Document Intelligence
 
-- This can involve PII.
-- Keep real sending disabled until Bryan explicitly approves the recipient and
-  email provider route.
-
-## Azure / Runtime Configuration Changes
-
-### Document Intelligence
-
-Confirmed that Azure Document Intelligence settings exist in Function App
-settings:
+Confirmed Azure Document Intelligence settings exist in Function App settings:
 
 - `DOC_INTEL_ENDPOINT`
 - `DOC_INTEL_KEY`
 
-The key value must not be printed or committed.
+Document Intelligence support is used for scanned PDFs/images. Text-layer PDFs
+can still use local PDF parsing.
 
-Purpose:
+## Email Settings
 
-- Scanned PDFs/images can use Document Intelligence.
-- Text-layer PDFs can still use local PDF parsing.
-
-### Email Safety Settings
-
-Confirmed and/or set safe email behavior:
+Set or confirmed email-safe settings:
 
 - `EMAIL_MODE=simulation`
 - `SEND_EMAILS=false`
 - `EMAIL_PROVIDER=simulation`
 
-No real email sending should happen with these settings.
+## SQL Connection String
 
-### SQL Connection String Fix
+Fixed the Azure SQL connection setting.
 
-Fixed the Azure SQL connection setting issue.
+Original issue observed:
 
-Observed problem:
+- The connection setting had `erver=` instead of `Server=`.
+- The connection string needed the compatible ODBC driver form.
 
-- `AZURE_SQL_CONNECTION_STRING` existed but had a malformed server key
-  (`erver=` instead of `Server=`).
-- The connection string also needed the compatible ODBC driver form.
+Result:
 
-Resolution:
-
-- Reconstructed the setting without printing secrets.
+- Reconstructed the SQL connection setting.
 - Used `Driver={ODBC Driver 18 for SQL Server}`.
-- Preserved the proper server, database, username, and password values.
+- Preserved the server, database, username, and password values without printing
+  the secret.
 
-## Azure SQL Changes
+## Azure SQL Base Compatibility
 
-### Added Base Compatibility Scripts
-
-The previous working environment already had some base tables. The newer Azure
-SQL database did not yet have those base objects, so some existing scripts/views
-failed until base compatibility tables were added.
-
-Added:
+Added base SQL scripts for the newer Azure SQL database:
 
 - `scripts/sql/00_create_core_legacy_tables.sql`
 - `scripts/sql/00_create_dim_interns.sql`
 
-These create the base objects needed by the existing code/views:
+These scripts create base objects used by existing code and views:
 
 - `dim_interns`
 - `fact_files`
@@ -232,10 +188,10 @@ Synced copies were also added under:
 
 - `azure_function_app/sql/`
 
-### Correct SQL Order For Empty New Azure SQL DB
+## SQL Script Order
 
-When configuring an empty Azure SQL database for this existing system, the
-working order is:
+Established the working SQL order for an empty Azure SQL database used by this
+existing system:
 
 ```text
 scripts/sql/00_create_core_legacy_tables.sql
@@ -253,23 +209,21 @@ scripts/sql/2026-06_schema_simplification.sql
 scripts/sql/2026-06_powerbi_no_dax_views.sql
 ```
 
-Reason for this order:
+Ordering fixes discovered during the chat:
 
-- `dim_interns`, `fact_files`, `fact_validations`, `fact_communications`, and
-  `dim_validation_rules` must exist before the views that reference them.
-- `2026-06_onboarding_schema.sql` must run before
-  `2026-06_schema_simplification.sql` because schema simplification references
-  onboarding document tables.
+- Base compatibility tables need to exist before views reference them.
+- `2026-06_onboarding_schema.sql` needs to run before
+  `2026-06_schema_simplification.sql`.
 
-### SQL Verification Result
+## SQL Verification
 
-Verification result after SQL setup:
+Azure SQL verification result:
 
 - `dbo_tables = 30`
 - `dbo_views = 41`
 - Missing required Power BI views: none.
 
-Verified required Power BI views:
+Verified Power BI views:
 
 - `vw_powerbi_dashboard_kpis`
 - `vw_powerbi_vp_summary`
@@ -282,15 +236,13 @@ Verified required Power BI views:
 - `vw_powerbi_costos_practicantes`
 - `vw_powerbi_vp_capacity`
 
-## Function App Code Changes
+## Function App SQL Setup Helpers
 
-### SQL Setup Helper Guard
-
-Added guarded SQL setup helpers in:
+Added SQL setup helper code in:
 
 - `azure_function_app/function_app.py`
 
-Added:
+Added functions/constants:
 
 - `setup_database`
 - `setup_database_on_startup`
@@ -298,21 +250,17 @@ Added:
 - `split_sql_batches`
 - `SQL_SETUP_ORDER`
 
-Guard setting:
+Added guard setting used by these helpers:
 
-```text
-ENABLE_ADMIN_SQL_SETUP=false
-```
+- `ENABLE_ADMIN_SQL_SETUP`
 
-Current expected state:
+Current confirmed value:
 
 - `ENABLE_ADMIN_SQL_SETUP=false`
 
-Do not enable this unless Bryan explicitly wants to rerun setup/migrations.
+## SQL Sync
 
-### SQL Scripts Included In Function App Package Folder
-
-Updated sync behavior so SQL scripts are copied into:
+Updated sync behavior so SQL scripts copy into:
 
 - `azure_function_app/sql/`
 
@@ -320,30 +268,21 @@ Related file:
 
 - `scripts/sync_function_modules.py`
 
-## Operational Utility Scripts Added
+## Operational Utility Scripts
 
 Added:
 
 - `scripts/run_azure_sql_setup_container.py`
 - `scripts/run_azure_sql_verify_container.py`
 
-Purpose:
+These scripts were used for SQL setup/verification from inside Azure when local
+SQL connectivity was blocked by network/firewall behavior.
 
-- Run SQL setup/verification from inside Azure when local SQL connectivity is
-  blocked by corporate network/firewall.
-- Redact secrets in command output.
+## Power BI / Reporting
 
-Important:
+Added or refined SQL reporting views for Bryan's no-DAX Power BI setup.
 
-- These scripts are operational helpers.
-- Do not run them casually.
-- Do not print secrets.
-
-## Power BI / Reporting Changes
-
-Added or refined SQL views for Bryan's no-DAX Power BI setup.
-
-Primary requested reporting areas:
+Reporting areas covered:
 
 - Vacantes
 - Costos
@@ -353,7 +292,7 @@ Primary requested reporting areas:
 - Missing documents
 - HR action queue
 
-Important views:
+Views involved:
 
 - `vw_powerbi_dashboard_kpis`
 - `vw_powerbi_vp_summary`
@@ -395,21 +334,24 @@ Related docs:
 - `docs/power_bi_dashboard.md`
 - `docs/schema_simplification.md`
 
-## Data Work Done During This Chat
+## Data Work
 
-The up-to-date intern spreadsheet Bryan sent had 3 sheets.
+Processed/checked the up-to-date intern spreadsheet Bryan sent.
 
-Observed processed counts from the prior environment pass:
+Observed counts:
 
+- 3 sheets in the spreadsheet.
 - 302 interns total.
 - 281 active.
 - 21 inactive.
 
-Stale missing-document items from test data were cleaned in the prior
-environment pass. Remaining exceptions were contract-risk style warnings, not
-Package 1 missing-document requirements.
+Cleaned stale missing-document items from previous test data in the earlier
+environment pass.
 
-## Documentation Changes Made
+Remaining exceptions were contract-risk style warnings, not Package 1
+missing-document requirements.
+
+## Documentation Updated
 
 Updated:
 
@@ -419,40 +361,3 @@ Updated:
 - `docs/schema_simplification.md`
 - `docs/power_bi_no_dax_5_pages.md`
 - `docs/claude_code_handoff_20260625.md`
-
-This handoff file should remain a changes-only summary, not a general project
-introduction.
-
-## What Still Needs Care
-
-- Real email sending is still intentionally off.
-- Do not enable real SMTP/Graph sending without Bryan's explicit instruction.
-- Do not use Power Automate unless Bryan explicitly reintroduces it.
-- Do not clean or overwrite real production data unless Bryan explicitly asks
-  and confirms backups/export are handled.
-- Do not expose secrets.
-- Local direct SQL connectivity may fail under corporate network/firewall.
-- The local Azure CLI has a known XML/`pyexpat` issue for some Storage data-plane
-  commands; management-plane commands worked better.
-
-## Useful Local Verification Commands
-
-Sync Function modules/scripts:
-
-```bash
-.venv/bin/python scripts/sync_function_modules.py
-```
-
-Compile local Python:
-
-```bash
-.venv/bin/python -m py_compile azure_function_app/function_app.py scripts/sync_function_modules.py azure_function_app/scripts/*.py
-```
-
-Safe smoke checks:
-
-```bash
-.venv/bin/python scripts/check_function_readiness.py
-.venv/bin/python scripts/smoke_e2e_pipeline.py
-SMOKE_CHECK_SQL_VIEWS=1 .venv/bin/python scripts/smoke_e2e_pipeline.py
-```
