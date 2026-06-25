@@ -85,3 +85,16 @@ BEGIN
     );
 END;
 GO
+
+-- fact_status_history: status-change audit log written by the ingestion pipeline
+-- (insert_status_history). Was missing from the fresh-setup scripts.
+IF OBJECT_ID('dbo.fact_status_history','U') IS NULL
+CREATE TABLE dbo.fact_status_history (
+  status_history_id NVARCHAR(50) NOT NULL PRIMARY KEY,
+  entity_type NVARCHAR(50) NULL,
+  entity_id NVARCHAR(50) NULL,
+  old_status_id NVARCHAR(50) NULL,
+  new_status_id NVARCHAR(50) NULL,
+  changed_by NVARCHAR(100) NULL,
+  change_reason NVARCHAR(MAX) NULL,
+  created_at DATETIME2 DEFAULT SYSUTCDATETIME());
