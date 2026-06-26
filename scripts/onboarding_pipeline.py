@@ -45,11 +45,21 @@ def _parse_emails(value):
     return [e.strip() for e in normalized.split(",") if e.strip()]
 
 
+POWERBI_LINK_LABEL = "PowerBI - Practicantes"
+POWERBI_LINK_TOKEN = "{{POWERBI_LINK}}"  # replaced with a hyperlink by _text_to_html
+
+
 def _text_to_html(text):
-    """Minimal plain-text → HTML so existing newline-formatted bodies render."""
+    """Minimal plain-text → HTML so existing newline-formatted bodies render.
+    POWERBI_LINK_TOKEN becomes a clickable 'PowerBI - Practicantes' hyperlink."""
     import html as _html
-    return "<html><body style=\"font-family:Arial,sans-serif\">" \
-           + _html.escape(str(text or "")).replace("\n", "<br>") + "</body></html>"
+    body = _html.escape(str(text or "")).replace("\n", "<br>")
+    if POWERBI_DASHBOARD_URL:
+        link = f'<a href="{POWERBI_DASHBOARD_URL.replace("&", "&amp;")}">{POWERBI_LINK_LABEL}</a>'
+    else:
+        link = POWERBI_LINK_LABEL
+    body = body.replace(POWERBI_LINK_TOKEN, link)
+    return "<html><body style=\"font-family:Arial,sans-serif\">" + body + "</body></html>"
 
 
 def resolve_person_email(personal_email, cemex_email, person_type="new_hire"):
@@ -945,7 +955,7 @@ def finalize_onboarding(intern_id, hr_data=None):
                        f"Por ello NO se envió el correo a Coparmex. Por favor envíen estos datos a la base de "
                        f"datos (incluyendo el número de puesto {req_id or '(sin posición)'} para hacer match). "
                        f"Una vez completos, se enviarán los datos a Coparmex.\n\n"
-                       f"Datos disponibles en Power BI: {POWERBI_DASHBOARD_URL}")
+                       f"Datos disponibles en {POWERBI_LINK_TOKEN}")
             result = {"status": "rh_notified_missing", "intern_id": intern_id,
                       "requisition_id": req_id, "missing": missing, "coparmex_sent": False}
         else:
@@ -960,7 +970,7 @@ def finalize_onboarding(intern_id, hr_data=None):
                        "Practicante dado de alta exitosamente",
                        f"El practicante {candidate.get('nombre_completo')} (posición {req_id}) fue dado de alta "
                        f"exitosamente y el paquete fue enviado a Coparmex.\n\n"
-                       f"Para acceder a los datos, visita Power BI: {POWERBI_DASHBOARD_URL}")
+                       f"Para acceder a los datos, visita {POWERBI_LINK_TOKEN}")
             result = {"status": "coparmex_sent", "intern_id": intern_id,
                       "requisition_id": req_id, "coparmex_sent": True}
 

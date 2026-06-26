@@ -85,6 +85,7 @@ SQL_SETUP_ORDER = [
     "2026-06_powerbi_no_dax_views.sql",
     "2026-06_powerbi_refinements.sql",
     "2026-06_open_positions.sql",
+    "2026-06_cost_columns.sql",
 ]
 
 
