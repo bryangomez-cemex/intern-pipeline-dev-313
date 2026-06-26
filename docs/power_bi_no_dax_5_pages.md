@@ -23,7 +23,18 @@ Use these on most pages:
 
 Recommended setting: slicers as dropdowns, single-select off, search on.
 
-
+vw_powerbi_dashboard_kpis
+vw_powerbi_interns_status
+vw_powerbi_vp_summary
+vw_powerbi_location_summary
+vw_powerbi_vacantes
+vw_powerbi_costos_practicantes
+vw_powerbi_contract_risk
+vw_powerbi_inactive_interns
+vw_powerbi_document_status
+vw_powerbi_document_summary
+vw_business_validation_exceptions
+vw_powerbi_hr_action_queue
 
 
 
@@ -132,19 +143,52 @@ Visuals:
   - Y-axis: `vp`
   - X-axis/Values: `current_practicantes`, `remaining_practicantes`
   - Sort: `remaining_practicantes`, ascending
+
+
+
+
+
 - Table `Capacidad Detalle`
   - Source: `vw_powerbi_vp_summary`
   - Columns: `vp`, `allowed_practicantes`, `current_practicantes`, `remaining_practicantes`, `utilization_pct`, `capacity_status`
+
   - Conditional formatting on `capacity_status`: red for `Over capacity`, yellow for `Near full`, green for `Available`
+
+
+
+
+
 - Bar chart `Vacantes por VP`
   - Source: `vw_powerbi_vacantes`
   - Y-axis: `vp`
   - X-axis/Values: `requisition_id`
   - Summarization: Count distinct
+
+
+
 - Table `Vacantes Detalle`
   - Source: `vw_powerbi_vacantes`
   - Columns: `requisition_id`, `position_name`, `vp`, `manager`, `oi_hc`, `cc_hc`, `cia_hc`, `created_at`, `days_open`, `next_action`
   - Sort: `days_open`, descending
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ## Page 3: Costos Y Distribucion
 
@@ -167,25 +211,47 @@ Visuals:
   - Field: `importe_promedio_activos`
   - Summarization: Average
   - Format: Currency
+
+
 - Column chart `Costo por VP`
   - Source: `vw_powerbi_costos_practicantes`
   - X-axis: `vp`
   - Y-axis/Values: `importe_total_sum`
   - Sort: `importe_total_sum`, descending
   - Format: Currency
+
+
 - Matrix `Costo Detalle`
   - Source: `vw_powerbi_costos_practicantes`
   - Rows: `vp`, `ubicacion_hc`, `estado_ubicacion_hc`, `cia_hc`
   - Values: `practicante_count`, `importe_total_sum`, `importe_total_avg`
+
+
 - Treemap `Costo Relativo`
   - Source: `vw_powerbi_costos_practicantes`
   - Category/Group: `vp`
   - Values: `importe_total_sum`
+
+
 - Bar chart `HC por Estado`
   - Source: `vw_powerbi_location_summary`
   - Y-axis: `estado_ubicacion_hc`
   - X-axis/Values: `hc_activos`
   - Sort: `hc_activos`, descending
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ## Page 4: Vencimientos, Inactivos Y Riesgo
 
@@ -210,26 +276,48 @@ Visuals:
   - Source: `vw_powerbi_dashboard_kpis`
   - Field: `hc_inactivos`
   - Summarization: Sum
+
+
+
 - Bar chart `Riesgo de Contrato`
   - Source: `vw_powerbi_contract_risk`
   - Y-axis: `risk_bucket`
   - X-axis/Values: `intern_id`
   - Summarization: Count distinct
   - Sort: `risk_bucket`, ascending
+
 - Bar chart `Riesgo por VP`
   - Source: `vw_powerbi_contract_risk`
   - Y-axis: `vp`
   - X-axis/Values: `intern_id`
   - Legend: `risk_bucket`
   - Summarization: Count distinct
+
+
+
 - Table `Accion Requerida`
   - Source: `vw_powerbi_contract_risk`
   - Columns: `intern_name`, `employee_number`, `vp`, `manager`, `contract_end_date`, `days_until_contract_end`, `risk_bucket`, `next_action`
   - Visual filter: `risk_bucket` is not `06 Sin riesgo cercano`
   - Sort: `days_until_contract_end`, ascending
+
 - Table `Inactivos`
   - Source: `vw_powerbi_inactive_interns`
   - Columns: `intern_name`, `employee_number`, `vp`, `manager`, `contract_end_date`, `raw_status`, `latest_status_event_date`
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ## Page 5: Documentos, Excepciones Y Acciones RH
 
@@ -251,29 +339,51 @@ Visuals:
   - Source: `vw_powerbi_dashboard_kpis`
   - Field: `excepciones_abiertas`
   - Summarization: Sum
+
+
+
 - Bar chart `Docs Faltantes por Documento`
   - Source: `vw_powerbi_document_summary`
   - Y-axis: `document_name`
   - X-axis/Values: `missing_rows`
   - Visual filter: `missing_rows` is greater than 0
   - Sort: `missing_rows`, descending
+
 - Bar chart `Excepciones por Campo`
   - Source: `vw_business_validation_exceptions`
   - Y-axis: `issue_field`
   - X-axis/Values: `issue_field`
   - Summarization: Count
   - Sort: Count, descending
+
+
+
+
+
 - Table `Documentos Detalle`
   - Source: `vw_powerbi_document_status`
   - Columns: `intern_name`, `employee_number`, `vp`, `manager`, `document_name`, `document_status_label`, `validation_status`, `severity`, `next_action`, `created_at`
   - Visual filter: `document_status_label` is not `Recibido`
+
+  
 - Table `Excepciones Detalle`
   - Source: `vw_business_validation_exceptions`
   - Columns: `intern_name`, `employee_number`, `vp`, `manager`, `issue_field`, `severity`, `issue_status`, `issue_description`, `suggested_fix`, `next_action`
+
+
 - Table `Cola RH`
   - Source: `vw_powerbi_hr_action_queue`
   - Columns: `action_category`, `intern_name`, `vp`, `manager`, `severity`, `action_description`, `next_action`, `action_created_at`
   - Sort: `action_created_at`, descending
+
+
+
+
+
+
+
+
+
 
 ## Visual Cleanup
 
