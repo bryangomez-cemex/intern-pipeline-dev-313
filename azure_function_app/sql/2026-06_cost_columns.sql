@@ -83,8 +83,12 @@ SELECT
     END AS is_contract_expired,
     DATEDIFF(DAY, CAST(SYSUTCDATETIME() AS DATE), contract_end_date) AS days_until_contract_end,
     -- Intern pay (lo que se paga al practicante) = Importe / ImporteSinComision.
-    TRY_CONVERT(DECIMAL(18,2),
-        REPLACE(REPLACE(REPLACE(CAST(importe_raw AS NVARCHAR(100)), '$', ''), ',', ''), ' ', '')
+    -- Fall back to salario_mensual for rows not yet re-synced with the cost columns.
+    COALESCE(
+        TRY_CONVERT(DECIMAL(18,2),
+            REPLACE(REPLACE(REPLACE(CAST(importe_raw AS NVARCHAR(100)), '$', ''), ',', ''), ' ', '')),
+        TRY_CONVERT(DECIMAL(18,2),
+            REPLACE(REPLACE(REPLACE(CAST(salario_mensual AS NVARCHAR(100)), '$', ''), ',', ''), ' ', ''))
     ) AS importe,
     -- Total company cost = ImporteTotal. For rows not yet re-synced with the cost
     -- columns, approximate it as salary x the comision factor (1.1 in the roster);
