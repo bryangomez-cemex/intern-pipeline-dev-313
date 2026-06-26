@@ -1,8 +1,8 @@
-# intern-pipeline-dev Azure Function
+# mex-intern-pipeline-func-win Azure Function
 
 Deploy this folder to the existing Azure Function App:
 
-- Function App: `intern-pipeline-dev`
+- Function App: `mex-intern-pipeline-func-win`
 - Resource group: `rg-intern-system-dev`
 - Runtime: Python
 - Hosting: Flex Consumption
@@ -37,7 +37,7 @@ The Function folder includes a synced copy of the required pipeline modules in `
 1. Open the `azure_function_app/` folder in VS Code.
 2. Sign into Azure.
 3. Use the Azure Functions extension.
-4. Deploy to existing Function App: `intern-pipeline-dev`.
+4. Deploy to existing Function App: `mex-intern-pipeline-func-win`.
 
 ## Azure CLI Deployment
 
@@ -47,12 +47,12 @@ If Azure Functions Core Tools and Azure CLI are installed:
 az login
 az account set --subscription "<subscription-name-or-id>"
 cd azure_function_app
-func azure functionapp publish intern-pipeline-dev --python
+func azure functionapp publish mex-intern-pipeline-func-win --python
 ```
 
 ## Required App Settings
 
-Add these in Azure Portal for `intern-pipeline-dev`:
+Add these in Azure Portal for `mex-intern-pipeline-func-win`:
 
 ```text
 AZURE_STORAGE_CONNECTION_STRING=<storage connection string>

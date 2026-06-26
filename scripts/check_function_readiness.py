@@ -18,10 +18,13 @@ REQUIRED_FILES = [
     FUNCTION_SCRIPTS_DIR / "pipeline_service.py",
     FUNCTION_SCRIPTS_DIR / "app_config.py",
     FUNCTION_SCRIPTS_DIR / "azure_clients.py",
+    FUNCTION_SCRIPTS_DIR / "document_pipeline.py",
     FUNCTION_SCRIPTS_DIR / "flexible_file_classifier.py",
     FUNCTION_SCRIPTS_DIR / "lifecycle_requirements.py",
     FUNCTION_SCRIPTS_DIR / "matching_engine.py",
+    FUNCTION_SCRIPTS_DIR / "onboarding_pipeline.py",
     FUNCTION_SCRIPTS_DIR / "communication_packager.py",
+    FUNCTION_SCRIPTS_DIR / "requisition_parser.py",
     REPO_ROOT / "requirements.txt",
     ROOT_SCRIPTS_DIR / "deployment_readiness_e2e.py",
 ]
@@ -36,6 +39,8 @@ REQUIRED_ENV_VARS = [
     "AZURE_SQL_AUTH_MODE",
     "EMAIL_MODE",
     "DEV_EMAIL_OVERRIDE",
+    "DOC_INTEL_ENDPOINT",
+    "DOC_INTEL_KEY",
 ]
 
 REQUIRED_PIPELINE_FUNCTIONS = [
@@ -67,10 +72,13 @@ def check_imports():
         "pipeline_service",
         "app_config",
         "azure_clients",
+        "document_pipeline",
         "flexible_file_classifier",
         "lifecycle_requirements",
         "matching_engine",
+        "onboarding_pipeline",
         "communication_packager",
+        "requisition_parser",
     ]
 
     try:

@@ -1,6 +1,6 @@
 # Intern System Pipeline
 
-Fake-data-first MVP for an automated intern/practicante lifecycle pipeline.
+Automated intern/practicante lifecycle pipeline for CEMEX HR.
 
 The pipeline supports:
 
@@ -8,11 +8,11 @@ The pipeline supports:
 - Accepted new hires: Excel/CSV intake, intern record creation/update, missing data/document detection, correction requests, HR/Coparmex/applicant package metadata.
 - Current interns: Excel/CSV sync, active/inactive/baja detection, upcoming expiration alerts, missing/expired document checks, and Power BI-ready reporting.
 
-Do not upload real personal data. Use fake intern names, fake emails, fake identifiers, and dev-only mailboxes.
+Keep email sending disabled until corporate Graph/SMTP approval is complete.
 
 ## Architecture
 
-Outlook, Power Automate, Power Apps, Gmail dev intake, or local upload drops files into Azure Blob `raw-uploads`.
+Email intake, Gmail dev intake, Azure/manual upload, or local upload drops files into Azure Blob `raw-uploads`.
 
 Processing paths:
 
@@ -30,20 +30,28 @@ All paths call `scripts/pipeline_service.py`, which writes Azure SQL records, cr
 
 ## Main Setup
 
-Run these SQL scripts in Azure Query Editor:
+When configuring a new empty Azure SQL database for this existing project, run
+these SQL scripts in this order:
 
 ```text
-scripts/sql/fix_file_id_source_file_id_compatibility.sql
+scripts/sql/00_create_core_legacy_tables.sql
+scripts/sql/00_create_dim_interns.sql
 scripts/sql/create_full_mvp_pipeline.sql
+scripts/sql/fix_file_id_source_file_id_compatibility.sql
+scripts/sql/seed_pipeline_validation_rules.sql
+scripts/sql/2026-06_package1_document_requirements.sql
+scripts/sql/2026-06_resolve_stale_missing_items.sql
 scripts/sql/add_corporate_column_aliases.sql
 scripts/sql/create_matching_engine_v1.sql
 scripts/sql/create_business_powerbi_views.sql
+scripts/sql/2026-06_onboarding_schema.sql
+scripts/sql/2026-06_schema_simplification.sql
+scripts/sql/2026-06_powerbi_no_dax_views.sql
 ```
 
-Run the compatibility script first when an older dev database already exists. It
-does not drop tables or data; it only adds safe missing columns and recreates
-legacy views such as `vw_pipeline_summary`, `vw_pipeline_files`,
-`vw_validation_errors`, and `vw_communications_status`.
+For an older dev database that already has base tables, the compatibility script
+can be run before or after `create_full_mvp_pipeline.sql`; for a new empty
+database, run the two `00_*` scripts first.
 
 Required local `.env` values:
 
@@ -56,10 +64,13 @@ AZURE_SQL_SERVER=...
 AZURE_SQL_DATABASE=intern_system_dev
 AZURE_SQL_AUTH_MODE=interactive
 EMAIL_MODE=simulation
+SEND_EMAILS=false
 DEV_EMAIL_OVERRIDE=dev-only@example.com
+DOC_INTEL_ENDPOINT=...
+DOC_INTEL_KEY=...
 ```
 
-`EMAIL_MODE=simulation` is the safe default.
+`EMAIL_MODE=simulation` and `SEND_EMAILS=false` are the safe defaults.
 
 ## Local Commands
 
@@ -72,37 +83,37 @@ source .venv/bin/activate
 Install local dependencies:
 
 ```bash
-python3 -m pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 Compile:
 
 ```bash
-python3 -m py_compile scripts/process_blob_file.py scripts/pipeline_service.py scripts/run_intake_pipeline.py scripts/flexible_file_classifier.py scripts/lifecycle_requirements.py scripts/matching_engine.py scripts/communication_packager.py scripts/graph_email_client.py scripts/send_prepared_communications.py scripts/send_real_dev_email_smtp.py scripts/check_function_readiness.py scripts/smoke_e2e_pipeline.py scripts/deployment_readiness_e2e.py
+.venv/bin/python -m py_compile scripts/process_blob_file.py scripts/pipeline_service.py scripts/run_intake_pipeline.py scripts/flexible_file_classifier.py scripts/lifecycle_requirements.py scripts/matching_engine.py scripts/communication_packager.py scripts/graph_email_client.py scripts/send_prepared_communications.py scripts/send_real_dev_email_smtp.py scripts/check_function_readiness.py scripts/smoke_e2e_pipeline.py scripts/deployment_readiness_e2e.py scripts/onboarding_pipeline.py scripts/document_pipeline.py scripts/requisition_parser.py
 ```
 
 Safe smoke test, no Blob/SQL writes and no real emails:
 
 ```bash
-python3 scripts/smoke_e2e_pipeline.py
+.venv/bin/python scripts/smoke_e2e_pipeline.py
 ```
 
 Deployment readiness E2E, offline by default with no Blob/SQL writes and no real emails:
 
 ```bash
-EMAIL_MODE=simulation python3 scripts/deployment_readiness_e2e.py
+EMAIL_MODE=simulation .venv/bin/python scripts/deployment_readiness_e2e.py
 ```
 
 Deployment readiness E2E against staging Azure, opt-in fake-data dry run only:
 
 ```bash
-EMAIL_MODE=simulation SEND_EMAILS=false EMAIL_DRY_RUN=true python3 scripts/deployment_readiness_e2e.py --live-azure --confirm-live-dry-run TEST
+EMAIL_MODE=simulation SEND_EMAILS=false EMAIL_DRY_RUN=true .venv/bin/python scripts/deployment_readiness_e2e.py --live-azure --confirm-live-dry-run TEST
 ```
 
 Optional read-only Azure SQL view check:
 
 ```bash
-SMOKE_CHECK_SQL_VIEWS=1 python3 scripts/smoke_e2e_pipeline.py
+SMOKE_CHECK_SQL_VIEWS=1 .venv/bin/python scripts/smoke_e2e_pipeline.py
 ```
 
 Local folder intake:
@@ -157,12 +168,59 @@ Upload a fake test file to `raw-uploads` and verify Azure SQL rows in the Power 
 
 Load these Azure SQL views:
 
-- `vw_interns_current`
-- `vw_full_mvp_interns_current`
-- `vw_full_mvp_document_status`
-- `vw_full_mvp_missing_items`
-- `vw_full_mvp_lifecycle_events`
+- `vw_canonical_interns_current`
+- `vw_canonical_intern_documents`
+- `vw_canonical_document_types`
+- `vw_canonical_org_assignments`
+- `vw_canonical_requisitions`
+- `vw_canonical_pipeline_runs`
 - `vw_business_validation_exceptions`
 - `vw_requisitions_status`
 - `vw_communications_status`
 - `vw_hr_actions_today`
+- `vw_powerbi_vacantes`
+- `vw_powerbi_costos_practicantes`
+- `vw_powerbi_expired_active_contracts`
+- `vw_powerbi_inactive_interns`
+- `vw_powerbi_vp_capacity`
+- `vw_powerbi_dashboard_kpis`
+- `vw_powerbi_vp_summary`
+- `vw_powerbi_location_summary`
+- `vw_powerbi_contract_risk`
+- `vw_powerbi_document_status`
+- `vw_powerbi_document_summary`
+- `vw_powerbi_hr_action_queue`
+
+The legacy `vw_full_mvp_*` views remain available for compatibility, but new reporting should prefer `vw_powerbi_*` for requested HR pages and `vw_canonical_*` for shared entities.
+
+## Operations Docs
+
+- Technical manual: `docs/technical_manual.md`
+- Power BI Service setup without DAX/Desktop: `docs/power_bi_no_dax_5_pages.md`
+- Email alert recommendations: `docs/email_alert_recommendations.md`
+- Schema simplification notes: `docs/schema_simplification.md`
+
+## Email (Azure Communication Services)
+
+Email from step 5 onward uses **Azure Communication Services** (no Microsoft Graph,
+no SMTP), via `scripts/email_service.py` (`send_email(...)`). `onboarding_pipeline.send_email`
+delegates to it. Config is read only from environment variables — set these locally
+(`.env`) and in the **Azure Function App → Settings → Environment variables / Application
+settings**:
+
+```
+EMAIL_PROVIDER=azure_communication_services
+EMAIL_SIMULATION_MODE=true      # safe default; false to send for real
+ACS_CONNECTION_STRING=...
+ACS_SENDER_EMAIL=...
+ACS_SENDER_NAME=Intern Pipeline
+TEST_EMAIL_TO=...
+RH_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com,valeria.acunaam@cemex.com
+COPARMEX_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com
+```
+
+`RH_RECIPIENT_EMAILS` are fixed internal recipients for HR notifications.
+`COPARMEX_RECIPIENT_EMAILS` currently uses a placeholder. Practicantes usually use
+CEMEX emails, while new hires may still use personal emails until their CEMEX account
+exists — `resolve_person_email()` picks the correct field by person/process type.
+Test locally with `python scripts/test_acs_email.py`.

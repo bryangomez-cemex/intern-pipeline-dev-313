@@ -3,6 +3,7 @@ import sys
 import uuid
 import mimetypes
 import re
+import unicodedata
 from datetime import datetime, UTC, timedelta
 
 import pandas as pd
@@ -70,6 +71,59 @@ def clean_value(value):
             return None
 
     return value
+
+
+def clean_org_value(value):
+    value = clean_value(value)
+
+    if value is None:
+        return None
+
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+
+    if isinstance(value, int):
+        return str(value)
+
+    text = str(value).strip()
+
+    if re.fullmatch(r"\d+\.0", text):
+        return text[:-2]
+
+    return text or None
+
+
+def org_key(value):
+    value = clean_org_value(value)
+
+    if value is None:
+        return None
+
+    normalized = unicodedata.normalize("NFKD", value)
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+    return " ".join(normalized.lower().split())
+
+
+def org_value_variants(value):
+    value = clean_org_value(value)
+
+    if value is None:
+        return []
+
+    variants = {value, str(value).strip()}
+
+    if re.fullmatch(r"\d+", value):
+        variants.add(f"{value}.0")
+
+    if re.fullmatch(r"\d+\.0", value):
+        variants.add(value[:-2])
+
+    return sorted({org_key(variant) for variant in variants if org_key(variant)})
+
+
+def manager_key(value):
+    return org_key(value)
 
 
 def clean_date(value):
@@ -894,11 +948,23 @@ def insert_communication(
 
 def resolve_group_recipients(cursor, recipient_group, fallback):
     """
-    Resolve the active recipient email(s) for a fixed group (HR, Coparmex, ...)
-    from dim_email_recipients, joined by ';'. Falls back to the provided default
-    if the table has no active entry, so the pipeline keeps working safely until
-    the table is populated with real addresses.
+    Resolve recipient email(s) for a fixed group (HR, Coparmex, ...).
+
+    Single source of truth is the env lists (RH_RECIPIENT_EMAILS /
+    COPARMEX_RECIPIENT_EMAILS), unified with the onboarding pipeline so both email
+    paths use the same recipients. The dim_email_recipients table is the next
+    fallback, and `fallback` is the last resort so the pipeline keeps working safely.
     """
+    # 1. Env lists (unified with onboarding_pipeline).
+    env_value = {
+        "HR": os.getenv("RH_RECIPIENT_EMAILS", ""),
+        "Coparmex": os.getenv("COPARMEX_RECIPIENT_EMAILS", ""),
+    }.get(recipient_group, "")
+    env_list = [e.strip() for e in (env_value or "").replace(";", ",").split(",") if e.strip()]
+    if env_list:
+        return ";".join(env_list)
+
+    # 2. dim_email_recipients table (if present on this schema).
     try:
         cursor.execute(
             """
@@ -932,6 +998,34 @@ def resolve_applicant_recipient(intern_email=None):
     return os.getenv("DEV_EMAIL_OVERRIDE") or "dev.intern@example.com"
 
 
+def _send_communication_now(recipient_email, subject, body):
+    """Send a prepared communication live via ACS (respects EMAIL_SIMULATION_MODE).
+    recipient_email may be one address or a ','/';'-separated list. Placeholder
+    *.example.com addresses are skipped. Best-effort: failures are logged and never
+    break pipeline processing. Returns True if at least one address was sent/simulated."""
+    try:
+        import onboarding_pipeline
+        recipients = [e.strip() for e in (recipient_email or "").replace(";", ",").split(",")
+                      if e.strip() and "@" in e and not e.strip().lower().endswith("example.com")]
+        ok = False
+        for to in recipients:
+            res = onboarding_pipeline.send_email(to, subject, body)
+            ok = ok or res.get("status") in ("sent", "simulated")
+        return ok
+    except Exception as exc:
+        print(f"communication send note: {exc}")
+        return False
+
+
+def _mark_communication_sent(cursor, communication_id):
+    try:
+        cursor.execute(
+            "UPDATE fact_communications SET status='Sent', communication_status='Sent' "
+            "WHERE communication_id=?", communication_id)
+    except Exception:
+        pass
+
+
 def prepare_correction_communication(
     cursor,
     source_file_id,
@@ -940,16 +1034,16 @@ def prepare_correction_communication(
     error_report_name,
     error_count
 ):
-    subject = f"Correction needed: {source_file_name}"
+    subject = f"Correccion requerida: {source_file_name}"
 
     body = (
-        f"The uploaded file {source_file_name} has {error_count} validation errors.\n\n"
-        f"An error report was generated: {error_report_name}\n\n"
-        "Please review the report, correct the file, and upload the corrected version.\n\n"
-        "This is a prepared communication record. No real email has been sent yet."
+        f"El archivo {source_file_name} tiene {error_count} errores de validacion.\n\n"
+        f"Se genero un reporte de errores: {error_report_name}\n\n"
+        "Por favor revisa el reporte, corrige el archivo y vuelve a subir la version corregida."
     )
 
-    return insert_communication(
+    recipient = resolve_applicant_recipient()
+    communication_id = insert_communication(
         cursor=cursor,
         intern_id=None,
         requisition_id=None,
@@ -957,12 +1051,15 @@ def prepare_correction_communication(
         email_template_id="ET005",
         communication_type="Correction Needed",
         recipient_group="Intern / Applicant",
-        recipient_email=resolve_applicant_recipient(),
+        recipient_email=recipient,
         subject=subject,
         body=body,
         status="Prepared",
         error_message=None
     )
+    if _send_communication_now(recipient, subject, body):
+        _mark_communication_sent(cursor, communication_id)
+    return communication_id
 
 
 def prepare_hr_package_communication(
@@ -971,16 +1068,16 @@ def prepare_hr_package_communication(
     source_file_name,
     good_rows
 ):
-    subject = f"HR package ready: {source_file_name}"
+    subject = f"Paquete de RH listo: {source_file_name}"
 
     body = (
-        f"The uploaded file {source_file_name} passed validation.\n\n"
-        f"{good_rows} intern records were inserted or updated.\n\n"
-        "This package is ready for HR review.\n\n"
-        "This is a prepared communication record. No real email has been sent yet."
+        f"El archivo {source_file_name} paso la validacion.\n\n"
+        f"Se insertaron o actualizaron {good_rows} registros de practicantes.\n\n"
+        "El paquete esta listo para revision de RH."
     )
 
-    return insert_communication(
+    recipient = resolve_group_recipients(cursor, "HR", "dev.hr@example.com")
+    communication_id = insert_communication(
         cursor=cursor,
         intern_id=None,
         requisition_id=None,
@@ -988,12 +1085,15 @@ def prepare_hr_package_communication(
         email_template_id="ET002",
         communication_type="HR Complete Package",
         recipient_group="HR",
-        recipient_email=resolve_group_recipients(cursor, "HR", "dev.hr@example.com"),
+        recipient_email=recipient,
         subject=subject,
         body=body,
         status="Prepared",
         error_message=None
     )
+    if _send_communication_now(recipient, subject, body):
+        _mark_communication_sent(cursor, communication_id)
+    return communication_id
 
 
 def prepare_coparmex_package_communication(
@@ -1001,28 +1101,32 @@ def prepare_coparmex_package_communication(
     source_file_id,
     source_file_name
 ):
-    subject = f"Coparmex package ready: {source_file_name}"
+    subject = f"Paquete Coparmex listo: {source_file_name}"
 
     body = (
-        f"The required Coparmex package for {source_file_name} is ready.\n\n"
-        "Only Coparmex-approved files should be included in the real email step.\n\n"
-        "This is a prepared communication record. No real email has been sent yet."
+        f"El paquete Coparmex para {source_file_name} esta listo.\n\n"
+        "RH: favor de revisar y reenviar a Coparmex la informacion correspondiente."
     )
 
-    return insert_communication(
+    # Process change: Coparmex notifications now go to RH, who forward to Coparmex.
+    recipient = resolve_group_recipients(cursor, "HR", "dev.hr@example.com")
+    communication_id = insert_communication(
         cursor=cursor,
         intern_id=None,
         requisition_id=None,
         file_id=source_file_id,
         email_template_id="ET003",
         communication_type="Coparmex Package",
-        recipient_group="Coparmex",
-        recipient_email=resolve_group_recipients(cursor, "Coparmex", "dev.coparmex@example.com"),
+        recipient_group="HR",
+        recipient_email=recipient,
         subject=subject,
         body=body,
         status="Prepared",
         error_message=None
     )
+    if _send_communication_now(recipient, subject, body):
+        _mark_communication_sent(cursor, communication_id)
+    return communication_id
 
 
 def prepare_intern_confirmation_communication(
@@ -1031,16 +1135,16 @@ def prepare_intern_confirmation_communication(
     source_file_name,
     good_rows
 ):
-    subject = f"File processed: {source_file_name}"
+    subject = f"Archivo procesado: {source_file_name}"
 
     body = (
-        f"The uploaded file {source_file_name} was processed successfully.\n\n"
-        f"{good_rows} records were accepted.\n\n"
-        "The HR team will contact the intern/applicant if anything else is needed.\n\n"
-        "This is a prepared communication record. No real email has been sent yet."
+        f"El archivo {source_file_name} se proceso correctamente.\n\n"
+        f"Se aceptaron {good_rows} registros.\n\n"
+        "El equipo de RH se pondra en contacto si se requiere algo adicional."
     )
 
-    return insert_communication(
+    recipient = resolve_applicant_recipient()
+    communication_id = insert_communication(
         cursor=cursor,
         intern_id=None,
         requisition_id=None,
@@ -1048,12 +1152,172 @@ def prepare_intern_confirmation_communication(
         email_template_id="ET004",
         communication_type="Intern Confirmation",
         recipient_group="Intern / Applicant",
-        recipient_email=resolve_applicant_recipient(),
+        recipient_email=recipient,
         subject=subject,
         body=body,
         status="Prepared",
         error_message=None
     )
+    if _send_communication_now(recipient, subject, body):
+        _mark_communication_sent(cursor, communication_id)
+    return communication_id
+
+
+def format_email_value(value):
+    value = clean_value(value)
+
+    if value is None:
+        return ""
+
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d")
+
+    return str(value)
+
+
+def build_baja_email_subject(context):
+    intern_name = format_email_value(context.get("nombre_completo")) or "Sin nombre"
+    return f"Baja De Practicante - {intern_name}"
+
+
+def build_baja_email_body(context):
+    lines = [
+        "Se adjunta la información relacionada.",
+        "FAVOR DE GESTIONAR BAJA.",
+        f"Fecha de nacimiento: {format_email_value(context.get('fecha_nacimiento'))}",
+        f"Correo personal: {format_email_value(context.get('email_personal'))}",
+        f"Universidad: {format_email_value(context.get('universidad'))}",
+        f"Carrera: {format_email_value(context.get('carrera'))}",
+        f"Semestre: {format_email_value(context.get('semestre'))}",
+        f"Fecha de graduación: {format_email_value(context.get('fecha_graduacion'))}",
+        f"CEMEX-ID: {format_email_value(context.get('cemex_id'))}",
+        f"Correo institucional CEMEX: {format_email_value(context.get('correo_institucional'))}",
+        "",
+        f"Vicepresidencia: {format_email_value(context.get('vp_hc'))}",
+        f"Nombre del proyecto: {format_email_value(context.get('nombre_proyecto'))}",
+        f"Jefe directo: {format_email_value(context.get('jefe_inmediato'))}",
+        f"AIRH: {format_email_value(context.get('asesor_rrhh_hc'))}",
+        f"Ubicación UDN: {format_email_value(context.get('ubicacion_udn'))}",
+        f"Compañia: {format_email_value(context.get('compania'))}",
+        f"OI: {format_email_value(context.get('oi'))}",
+        f"CC: {format_email_value(context.get('cc'))}",
+        f"Sueldo: {format_email_value(context.get('salario_mensual'))}",
+        f"Fecha de ingreso: {format_email_value(context.get('fecha_de_ingreso'))}",
+        f"Fecha fin: {format_email_value(context.get('fecha_contrato_vence'))}",
+        f"Estado de practicante: {format_email_value(context.get('estado_practicante'))}",
+        f"Nombre completo: {format_email_value(context.get('nombre_completo'))}",
+        "",
+        "Este correo fue generado automáticamente por el intern-system pipeline.",
+    ]
+    return "\n".join(lines)
+
+
+def fetch_baja_context(cursor, intern_id, fallback_status=None):
+    cursor.execute(
+        """
+        SELECT TOP 1
+            i.nombre_completo,
+            i.fecha_nacimiento,
+            i.email_personal,
+            i.universidad,
+            i.carrera,
+            i.semestre,
+            i.fecha_graduacion,
+            COALESCE(i.cemex_id, i.num_empleado_cemex) AS cemex_id,
+            i.correo_institucional,
+            i.vp_hc,
+            COALESCE(r.descripcion_proyecto, r.puesto, i.puesto) AS nombre_proyecto,
+            i.jefe_inmediato,
+            i.asesor_rrhh_hc,
+            COALESCE(i.ubicacion_udn, i.ubicacion_hc) AS ubicacion_udn,
+            COALESCE(i.compania, i.cia_hc) AS compania,
+            COALESCE(i.oi, i.oi_hc) AS oi,
+            COALESCE(i.cc, i.cc_hc) AS cc,
+            i.salario_mensual,
+            i.fecha_de_ingreso,
+            i.fecha_contrato_vence,
+            i.status_id AS estado_practicante
+        FROM dbo.dim_interns i
+        LEFT JOIN dbo.dim_requisitions r
+            ON i.requisition_id = r.requisition_id
+        WHERE i.intern_id = ?
+        """,
+        intern_id,
+    )
+    row = cursor.fetchone()
+    if not row:
+        return {"intern_id": intern_id, "estado_practicante": fallback_status}
+
+    columns = [column[0] for column in cursor.description]
+    context = dict(zip(columns, row))
+    if fallback_status:
+        context["estado_practicante"] = fallback_status
+    context["intern_id"] = intern_id
+    return context
+
+
+def _send_baja_email_now(cursor, subject, body):
+    """Send the baja notification to HR via live ACS (respects EMAIL_SIMULATION_MODE
+    like every other email). Best-effort: a send failure never breaks row
+    processing. Returns True when at least one recipient was sent/simulated."""
+    try:
+        import onboarding_pipeline
+        recipients = onboarding_pipeline._parse_emails(onboarding_pipeline.RH_RECIPIENT_EMAILS)
+        if not recipients:
+            joined = resolve_group_recipients(cursor, "HR", os.getenv("DEV_EMAIL_OVERRIDE") or "")
+            recipients = [e.strip() for e in (joined or "").replace(";", ",").split(",") if e.strip()]
+        ok = False
+        for to in recipients:
+            res = onboarding_pipeline.send_email(to, subject, body)
+            ok = ok or res.get("status") in ("sent", "simulated")
+        return ok
+    except Exception as exc:
+        print(f"baja email send note: {exc}")
+        return False
+
+
+def prepare_baja_communication(
+    cursor,
+    intern_id,
+    source_file_id,
+    old_status,
+    new_status,
+):
+    context = fetch_baja_context(cursor, intern_id, fallback_status=new_status)
+    subject = build_baja_email_subject(context)
+    body = build_baja_email_body(context)
+
+    communication_id = insert_communication(
+        cursor=cursor,
+        intern_id=intern_id,
+        requisition_id=None,
+        file_id=source_file_id,
+        email_template_id="ET_BAJA",
+        communication_type="Baja De Practicante",
+        recipient_group="HR",
+        recipient_email=resolve_group_recipients(
+            cursor,
+            "HR",
+            os.getenv("DEV_EMAIL_OVERRIDE") or "dev.hr@example.com",
+        ),
+        subject=subject,
+        body=body,
+        status="Prepared",
+        error_message=f"Auto-prepared from status transition {old_status} -> {new_status}.",
+    )
+
+    # Live notification to HR (in addition to the prepared audit record).
+    if _send_baja_email_now(cursor, subject, body):
+        try:
+            cursor.execute(
+                "UPDATE fact_communications SET status='Sent', communication_status='Sent' "
+                "WHERE communication_id=?",
+                communication_id,
+            )
+        except Exception:
+            pass
+
+    return communication_id
 
 
 # ============================================================
@@ -1249,16 +1513,42 @@ def has_stable_identifier(row):
     return any(clean_value(row.get(field_name)) for field_name in stable_fields)
 
 
-def validate_flexible_intern_row(row, process_type_id):
-    errors = validate_intern_row(row)
+def is_non_intern_summary_row(row, process_type_id):
+    if process_type_id not in {"current_intern_sync", "PROC_CURRENT_SYNC"}:
+        return False
 
-    if process_type_id in {"current_intern_sync", "PROC_CURRENT_SYNC"} and not has_stable_identifier(row):
-        errors.append((
-            "VR020",
-            "stable_identifier",
-            "No reliable identifier found for current intern row",
-            "Add employee number, CEMEX employee number, CURP, RFC, or NSS."
-        ))
+    if has_stable_identifier(row):
+        return False
+
+    return not any(
+        clean_value(row.get(field_name))
+        for field_name in ("NombreCompleto", "Nombre", "Paterno", "Materno", "Estatus")
+    )
+
+
+def validate_flexible_intern_row(row, process_type_id):
+    if process_type_id in {"current_intern_sync", "PROC_CURRENT_SYNC"}:
+        errors = []
+
+        if not has_stable_identifier(row):
+            errors.append((
+                "VR020",
+                "stable_identifier",
+                "No reliable identifier found for current intern row",
+                "Add employee number, CEMEX employee number, CURP, RFC, or NSS."
+            ))
+
+        if not clean_value(row.get("NombreCompleto")):
+            errors.append((
+                "VR001",
+                "NombreCompleto",
+                "Missing full name",
+                "Add the intern full name."
+            ))
+
+        return errors
+
+    errors = validate_intern_row(row)
 
     return errors
 
@@ -1307,14 +1597,261 @@ def log_error_report_file(cursor, report_file_id, report_file_name, report_blob_
 
 
 # ============================================================
+# CEMEX ORG RELATION ENRICHMENT
+# ============================================================
+
+ORG_FIELD_TO_DB_COLUMN = {
+    "JefeInmediato": "jefe_inmediato",
+    "VP HC": "vp_hc",
+    "CC HC": "cc_hc",
+    "OI HC": "oi_hc",
+    "CIA HC": "cia_hc",
+}
+
+ORG_RELATION_RULES = [
+    ("JefeInmediato", "VP HC", 100),
+    ("JefeInmediato", "CC HC", 100),
+    ("JefeInmediato", "OI HC", 100),
+    ("JefeInmediato", "CIA HC", 100),
+    ("OI HC", "VP HC", 90),
+    ("OI HC", "CC HC", 90),
+    ("OI HC", "CIA HC", 85),
+    ("CC HC", "VP HC", 80),
+    ("CC HC", "CIA HC", 80),
+    ("VP HC", "CIA HC", 70),
+    ("OI HC", "JefeInmediato", 60),
+    ("CC HC", "JefeInmediato", 50),
+]
+
+MANAGER_ASSIGNMENT_TARGETS = {
+    "VP HC": "vp",
+    "CC HC": "cc",
+    "OI HC": "oi",
+    "CIA HC": "compania",
+}
+
+
+def ensure_manager_assignments_table(cursor):
+    cursor.execute(
+        """
+        IF OBJECT_ID('dbo.dim_manager_assignments','U') IS NULL
+        CREATE TABLE dbo.dim_manager_assignments (
+          jefe_key NVARCHAR(300) NOT NULL PRIMARY KEY,
+          jefe_directo NVARCHAR(200) NULL,
+          vp NVARCHAR(200) NULL,
+          asesor_rh NVARCHAR(200) NULL,
+          ubicacion_udn NVARCHAR(200) NULL,
+          estado NVARCHAR(100) NULL,
+          compania NVARCHAR(200) NULL,
+          oi NVARCHAR(50) NULL,
+          cc NVARCHAR(50) NULL,
+          updated_at DATETIME2 DEFAULT SYSUTCDATETIME()
+        )
+        """
+    )
+
+
+def best_unique_candidate(candidates):
+    scores = {}
+    labels = {}
+
+    for value, count, strength in candidates:
+        value = clean_org_value(value)
+
+        if value is None:
+            continue
+
+        key = org_key(value)
+        score = (strength * 100000) + int(count or 1)
+        scores[key] = scores.get(key, 0) + score
+        labels.setdefault(key, value)
+
+    if not scores:
+        return None
+
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+
+    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+        return None
+
+    return labels[ranked[0][0]]
+
+
+def query_dim_intern_relation(cursor, source_field, source_value, target_field, strength):
+    source_column = ORG_FIELD_TO_DB_COLUMN[source_field]
+    target_column = ORG_FIELD_TO_DB_COLUMN[target_field]
+    variants = org_value_variants(source_value)
+
+    if not variants:
+        return []
+
+    placeholders = ", ".join("?" for _ in variants)
+    cursor.execute(
+        f"""
+        SELECT CAST({target_column} AS NVARCHAR(4000)) AS target_value,
+               COUNT(*) AS match_count
+        FROM dbo.dim_interns
+        WHERE {target_column} IS NOT NULL
+          AND LTRIM(RTRIM(CAST({target_column} AS NVARCHAR(4000)))) <> ''
+          AND LOWER(LTRIM(RTRIM(CAST({source_column} AS NVARCHAR(4000))))) IN ({placeholders})
+        GROUP BY CAST({target_column} AS NVARCHAR(4000))
+        """,
+        *variants,
+    )
+
+    return [(row[0], row[1], strength) for row in cursor.fetchall()]
+
+
+def query_manager_assignment_relation(cursor, source_field, source_value, target_field, strength):
+    if source_field != "JefeInmediato" or target_field not in MANAGER_ASSIGNMENT_TARGETS:
+        return []
+
+    target_column = MANAGER_ASSIGNMENT_TARGETS[target_field]
+    key = manager_key(source_value)
+    variants = org_value_variants(source_value)
+
+    if not key and not variants:
+        return []
+
+    clauses = []
+    params = []
+
+    if key:
+        clauses.append("jefe_key = ?")
+        params.append(key)
+
+    if variants:
+        placeholders = ", ".join("?" for _ in variants)
+        clauses.append(f"LOWER(LTRIM(RTRIM(CAST(jefe_directo AS NVARCHAR(4000))))) IN ({placeholders})")
+        params.extend(variants)
+
+    cursor.execute(
+        f"""
+        SELECT CAST({target_column} AS NVARCHAR(4000)) AS target_value,
+               COUNT(*) AS match_count
+        FROM dbo.dim_manager_assignments
+        WHERE {target_column} IS NOT NULL
+          AND LTRIM(RTRIM(CAST({target_column} AS NVARCHAR(4000)))) <> ''
+          AND ({" OR ".join(clauses)})
+        GROUP BY CAST({target_column} AS NVARCHAR(4000))
+        """,
+        *params,
+    )
+
+    return [(row[0], row[1], strength + 5) for row in cursor.fetchall()]
+
+
+def suggest_org_field(cursor, row, target_field):
+    candidates = []
+
+    for source_field, relation_target_field, strength in ORG_RELATION_RULES:
+        if relation_target_field != target_field:
+            continue
+
+        source_value = clean_org_value(row.get(source_field))
+
+        if not source_value:
+            continue
+
+        candidates.extend(query_manager_assignment_relation(
+            cursor,
+            source_field,
+            source_value,
+            target_field,
+            strength,
+        ))
+        candidates.extend(query_dim_intern_relation(
+            cursor,
+            source_field,
+            source_value,
+            target_field,
+            strength,
+        ))
+
+    return best_unique_candidate(candidates)
+
+
+def enrich_org_fields(cursor, row):
+    enriched = dict(row)
+    ensure_manager_assignments_table(cursor)
+
+    for field_name in ("JefeInmediato", "VP HC", "CC HC", "OI HC", "CIA HC"):
+        if clean_org_value(enriched.get(field_name)):
+            enriched[field_name] = clean_org_value(enriched.get(field_name))
+            continue
+
+        suggestion = suggest_org_field(cursor, enriched, field_name)
+
+        if suggestion:
+            enriched[field_name] = suggestion
+
+    return enriched
+
+
+def upsert_manager_assignment_from_row(cursor, row):
+    manager = clean_org_value(row.get("JefeInmediato"))
+    key = manager_key(manager)
+
+    if not manager or not key:
+        return
+
+    ensure_manager_assignments_table(cursor)
+
+    cursor.execute(
+        """
+        MERGE dbo.dim_manager_assignments AS target
+        USING (
+            SELECT
+                ? AS jefe_key,
+                ? AS jefe_directo,
+                ? AS vp,
+                ? AS asesor_rh,
+                ? AS ubicacion_udn,
+                ? AS estado,
+                ? AS compania,
+                ? AS oi,
+                ? AS cc
+        ) AS source
+        ON target.jefe_key = source.jefe_key
+        WHEN MATCHED THEN
+            UPDATE SET
+                jefe_directo = COALESCE(source.jefe_directo, target.jefe_directo),
+                vp = COALESCE(source.vp, target.vp),
+                asesor_rh = COALESCE(source.asesor_rh, target.asesor_rh),
+                ubicacion_udn = COALESCE(source.ubicacion_udn, target.ubicacion_udn),
+                estado = COALESCE(source.estado, target.estado),
+                compania = COALESCE(source.compania, target.compania),
+                oi = COALESCE(source.oi, target.oi),
+                cc = COALESCE(source.cc, target.cc),
+                updated_at = SYSUTCDATETIME()
+        WHEN NOT MATCHED THEN
+            INSERT (jefe_key, jefe_directo, vp, asesor_rh, ubicacion_udn, estado, compania, oi, cc)
+            VALUES (source.jefe_key, source.jefe_directo, source.vp, source.asesor_rh,
+                    source.ubicacion_udn, source.estado, source.compania, source.oi, source.cc);
+        """,
+        key,
+        manager,
+        clean_org_value(row.get("VP HC")),
+        clean_org_value(row.get("ASESOR RRHH HC")),
+        clean_org_value(row.get("UBICACIÓN HC")),
+        clean_org_value(row.get("ESTADO UBICACIÓN HC")),
+        clean_org_value(row.get("CIA HC")),
+        clean_org_value(row.get("OI HC")),
+        clean_org_value(row.get("CC HC")),
+    )
+
+
+# ============================================================
 # INTERN INSERT / UPDATE
 # ============================================================
 
 def insert_or_update_intern(cursor, row, intern_id_override=None):
+    row = enrich_org_fields(cursor, row)
     intern_id = intern_id_override or generate_intern_id(row)
 
     fecha_de_ingreso = clean_date(row.get("FechadeIngreso"))
     fecha_contrato_vence = clean_date(row.get("FechaContratoVence"))
+    status_id = clean_value(row.get("Estatus")) or "ST002"
 
     cursor.execute(
         """
@@ -1350,7 +1887,9 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
                 ? AS area,
                 ? AS status_id,
                 ? AS fecha_de_ingreso,
-                ? AS fecha_contrato_vence
+                ? AS fecha_contrato_vence,
+                ? AS importe,
+                ? AS importe_total
         ) AS source
         ON target.intern_id = source.intern_id
 
@@ -1385,6 +1924,8 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
                 status_id = source.status_id,
                 fecha_de_ingreso = source.fecha_de_ingreso,
                 fecha_contrato_vence = source.fecha_contrato_vence,
+                importe = source.importe,
+                importe_total = source.importe_total,
                 updated_at = SYSUTCDATETIME()
 
         WHEN NOT MATCHED THEN
@@ -1418,7 +1959,9 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
                 area,
                 status_id,
                 fecha_de_ingreso,
-                fecha_contrato_vence
+                fecha_contrato_vence,
+                importe,
+                importe_total
             )
             VALUES (
                 source.intern_id,
@@ -1450,7 +1993,9 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
                 source.area,
                 source.status_id,
                 source.fecha_de_ingreso,
-                source.fecha_contrato_vence
+                source.fecha_contrato_vence,
+                source.importe,
+                source.importe_total
             );
         """,
         intern_id,
@@ -1469,21 +2014,25 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
         clean_value(row.get("Carrera")),
         clean_value(row.get("Semestre")),
         clean_value(row.get("Puesto")),
-        clean_value(row.get("JefeInmediato")),
+        clean_org_value(row.get("JefeInmediato")),
         clean_value(row.get("UBICACIÓN HC")),
         clean_value(row.get("ESTADO UBICACIÓN HC")),
         clean_value(row.get("ASESOR RRHH HC")),
         clean_value(row.get("SalarioMensual")),
-        clean_value(row.get("CC HC")),
-        clean_value(row.get("VP HC")),
+        clean_org_value(row.get("CC HC")),
+        clean_org_value(row.get("VP HC")),
         clean_value(row.get("RegionRH")),
-        clean_value(row.get("OI HC")),
-        clean_value(row.get("CIA HC")),
+        clean_org_value(row.get("OI HC")),
+        clean_org_value(row.get("CIA HC")),
         clean_value(row.get("Area")),
-        "ST002",
+        status_id,
         fecha_de_ingreso,
         fecha_contrato_vence,
+        clean_value(row.get("Importe")),
+        clean_value(row.get("ImporteTotal")),
     )
+
+    upsert_manager_assignment_from_row(cursor, row)
 
     return intern_id
 
@@ -1627,6 +2176,59 @@ def normalize_status(value):
     )
 
 
+ACTIVE_STATUS_VALUES = {"active", "activo", "st002"}
+INACTIVE_STATUS_VALUES = {"inactive", "inactivo", "baja", "st003", "st004"}
+
+
+def status_family(value):
+    normalized = normalize_status(value)
+
+    if normalized in ACTIVE_STATUS_VALUES:
+        return "active"
+
+    if normalized in INACTIVE_STATUS_VALUES:
+        return "inactive"
+
+    return normalized
+
+
+def is_active_to_baja_transition(old_status, new_status):
+    return status_family(old_status) == "active" and status_family(new_status) == "inactive"
+
+
+def get_effective_intern_status(cursor, intern_id):
+    if not intern_id:
+        return None
+
+    try:
+        cursor.execute(
+            """
+            SELECT TOP 1 new_status
+            FROM dbo.fact_intern_lifecycle_events
+            WHERE intern_id = ?
+              AND new_status IS NOT NULL
+            ORDER BY event_date DESC, created_at DESC
+            """,
+            intern_id,
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            return row[0]
+    except Exception as status_error:
+        print(f"Could not read latest lifecycle status for {intern_id}: {status_error}")
+
+    cursor.execute(
+        """
+        SELECT TOP 1 status_id
+        FROM dbo.dim_interns
+        WHERE intern_id = ?
+        """,
+        intern_id,
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
 def validate_current_intern_lifecycle(row):
     errors = []
     alerts = []
@@ -1753,17 +2355,31 @@ def append_missing_item_error(error_rows, file_id, file_name, row_number, intern
     })
 
 
+def validation_rule_id_for_missing_item(missing_item):
+    missing_type = (missing_item or {}).get("missing_type")
+    missing_code = (missing_item or {}).get("missing_code")
+
+    if missing_code == "DATE_ORDER":
+        return "VR005"
+    if missing_type == "BusinessRule":
+        return "VR009"
+    if missing_type == "Validation":
+        return "VR031"
+    if missing_type == "Document":
+        return "VR022"
+    return "VR001"
+
+
 def process_lifecycle_row(cursor, row, classification, run_id, file_id, row_number, process_type_id=None):
     process_type_id = process_type_id or classification["process_type_id"]
     row_errors = validate_flexible_intern_row(row, process_type_id)
     lifecycle_errors, lifecycle_alerts = validate_current_intern_lifecycle(row)
 
     if is_current_intern_profile(classification):
-        row_errors.extend(lifecycle_errors)
         matched_intern_id, match_message = find_matching_current_intern(cursor, row)
         intern_id = matched_intern_id or generate_intern_id(row)
 
-        if not matched_intern_id:
+        if not matched_intern_id and match_message != "No existing intern matched the stable identifiers.":
             row_errors.append((
                 "VR032",
                 "intern_match",
@@ -1804,28 +2420,70 @@ def process_lifecycle_row(cursor, row, classification, run_id, file_id, row_numb
 
             return matched_intern_id, row_errors, False
 
-        insert_or_update_intern(cursor, row, intern_id_override=matched_intern_id)
+        target_intern_id = matched_intern_id or intern_id
+        previous_status = get_effective_intern_status(cursor, matched_intern_id) if matched_intern_id else None
+        incoming_status = clean_value(row.get("Estatus"))
+        insert_or_update_intern(cursor, row, intern_id_override=target_intern_id)
 
         insert_lifecycle_event(
             cursor=cursor,
             run_id=run_id,
             file_id=file_id,
-            intern_id=matched_intern_id,
+            intern_id=target_intern_id,
             process_type_id=process_type_id,
             event_type="current_intern_sync",
-            event_status="Updated",
+            event_status="Updated" if matched_intern_id else "Created",
             source_row_number=row_number,
-            new_status=clean_value(row.get("Estatus")),
-            message="Current intern record updated from sync file.",
+            old_status=previous_status,
+            new_status=incoming_status,
+            message="Current intern record updated from sync file." if matched_intern_id else "Current intern record created from sync file.",
             needs_review=0
         )
+
+        if is_active_to_baja_transition(previous_status, incoming_status):
+            baja_communication_id = prepare_baja_communication(
+                cursor=cursor,
+                intern_id=target_intern_id,
+                source_file_id=file_id,
+                old_status=previous_status,
+                new_status=incoming_status,
+            )
+            insert_lifecycle_event(
+                cursor=cursor,
+                run_id=run_id,
+                file_id=file_id,
+                intern_id=target_intern_id,
+                process_type_id="PROC_BAJA",
+                event_type="baja_requested",
+                event_status="Prepared",
+                source_row_number=row_number,
+                old_status=previous_status,
+                new_status=incoming_status,
+                message=f"Prepared HR baja communication {baja_communication_id}.",
+                needs_review=0,
+            )
+
+        for rule_id, field_name, message, suggested_fix in lifecycle_errors:
+            insert_lifecycle_event(
+                cursor=cursor,
+                run_id=run_id,
+                file_id=file_id,
+                intern_id=target_intern_id,
+                process_type_id=process_type_id,
+                event_type="current_intern_review",
+                event_status="Needs Review",
+                source_row_number=row_number,
+                new_status=clean_value(row.get("Estatus")),
+                message=message,
+                needs_review=1
+            )
 
         for event_type, event_status, message in lifecycle_alerts:
             insert_lifecycle_event(
                 cursor=cursor,
                 run_id=run_id,
                 file_id=file_id,
-                intern_id=matched_intern_id,
+                intern_id=target_intern_id,
                 process_type_id=process_type_id,
                 event_type=event_type,
                 event_status=event_status,
@@ -1835,7 +2493,7 @@ def process_lifecycle_row(cursor, row, classification, run_id, file_id, row_numb
                 needs_review=0
             )
 
-        return matched_intern_id, [], True
+        return target_intern_id, [], True
 
     intern_id = generate_intern_id(row)
 
@@ -2039,6 +2697,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
 
         error_rows = []
         missing_items_count = 0
+        missing_error_count = 0
         processed_intern_ids = set()
         document_requirement_checks_enabled = False
         document_missing_items_affect_validation = True
@@ -2384,6 +3043,9 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                             )
 
                         row_process_type_id = classification["process_type_id"]
+                        if is_non_intern_summary_row(row_to_process, row_process_type_id):
+                            continue
+
                         missing_items = []
                         if not legacy_template_mode:
                             canonical_row = build_canonical_row(
@@ -2409,7 +3071,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                             intern_id = generate_intern_id(row_to_process)
                             row_errors = [
                                 (
-                                    missing_item["missing_type"],
+                                    validation_rule_id_for_missing_item(missing_item),
                                     missing_item["missing_code"],
                                     missing_item["missing_description"],
                                     "Provide the missing lifecycle requirement."
@@ -2430,6 +3092,8 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
 
                         for missing_item in missing_items:
                             missing_items_count += 1
+                            if missing_item["severity"] == "Error":
+                                missing_error_count += 1
 
                             lifecycle_requirements.log_missing_item(
                                 cursor=cursor,
@@ -2489,7 +3153,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                     print(f"Good rows inserted/updated: {good_rows}")
                     print(f"Bad rows logged: {bad_rows}")
 
-                    if bad_rows > 0 or missing_items_count > 0:
+                    if bad_rows > 0 or missing_error_count > 0:
                         status_message = f"{bad_rows} rows failed validation."
 
                         if missing_items_count > 0:
@@ -2555,6 +3219,9 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                         row,
                         classification.get("detected_columns", [])
                     )
+                    if is_non_intern_summary_row(row_to_process, classification["process_type_id"]):
+                        continue
+
                     canonical_row = build_canonical_row(
                         row_to_process,
                         classification.get("detected_columns", [])
@@ -2577,7 +3244,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                         intern_id = generate_intern_id(row_to_process)
                         row_errors = [
                             (
-                                missing_item["missing_type"],
+                                validation_rule_id_for_missing_item(missing_item),
                                 missing_item["missing_code"],
                                 missing_item["missing_description"],
                                 "Provide the missing lifecycle requirement."
@@ -2598,6 +3265,8 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
 
                     for missing_item in missing_items:
                         missing_items_count += 1
+                        if missing_item["severity"] == "Error":
+                            missing_error_count += 1
 
                         lifecycle_requirements.log_missing_item(
                             cursor=cursor,
@@ -2658,7 +3327,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                 print(f"Good rows inserted/updated: {good_rows}")
                 print(f"Bad rows logged: {bad_rows}")
 
-                if bad_rows > 0 or missing_items_count > 0:
+                if bad_rows > 0 or missing_error_count > 0:
                     status_message = f"{bad_rows} rows failed validation."
 
                     if missing_items_count > 0:
@@ -2764,6 +3433,8 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
 
                         if document_missing_items_affect_validation:
                             missing_items_count += 1
+                            if missing_document["severity"] == "Error":
+                                missing_error_count += 1
 
                             append_missing_item_error(
                                 error_rows=error_rows,
@@ -2774,14 +3445,14 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                                 missing_item=missing_document
                             )
 
-                if missing_items_count > 0:
+                if missing_error_count > 0:
                     update_file_status(
                         cursor=cursor,
                         file_id=file_id,
                         file_status_id="FS006",
                         validation_status="Validation Failed",
                         error_message=(
-                            f"{missing_items_count} lifecycle missing items detected."
+                            f"{missing_error_count} blocking lifecycle missing items detected."
                         ),
                     )
 
@@ -2793,7 +3464,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                         new_status_id="ST006",
                         changed_by="pipeline",
                         change_reason=(
-                            f"{missing_items_count} lifecycle missing items detected"
+                            f"{missing_error_count} blocking lifecycle missing items detected"
                         )
                     )
 
@@ -2911,7 +3582,11 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                 print("Communication package metadata could not be prepared:")
                 print(package_error)
 
-        validation_passed = len(error_rows) == 0
+        blocking_error_rows = [
+            error_row for error_row in error_rows
+            if error_row.get("severity", "Error") == "Error"
+        ]
+        validation_passed = bad_rows == 0 and missing_error_count == 0 and len(blocking_error_rows) == 0
         validation_result = "Validation Passed" if validation_passed else "Validation Failed"
         processed_blob_status = "Processed" if validation_passed else "Validation Failed"
 
@@ -3148,6 +3823,8 @@ def _try_onboarding_route(source_container, source_blob_name, run_type):
     meta = {
         "sender_email": metadata.get("sender_email"),
         "requisition_id": metadata.get("requisition_id") or None,
+        "email_subject": metadata.get("email_subject"),
+        "body_fields": metadata.get("body_fields"),
         "source_container": source_container,
         "source_blob": source_blob_name,
     }
@@ -3155,7 +3832,7 @@ def _try_onboarding_route(source_container, source_blob_name, run_type):
     try:
         kind = onboarding_pipeline.classify_document(local_path, source_blob_name)
 
-        if kind in ("requisicion", "alta_candidate", "hr_new_hires"):
+        if kind in ("requisicion", "alta_candidate", "hr_new_hires", "open_positions"):
             try:
                 result = onboarding_pipeline.process_onboarding_file(local_path, source_blob_name, meta=meta)
             except Exception as processing_error:

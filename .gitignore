@@ -6,10 +6,18 @@ __pycache__/
 .venv/
 
 data/*.xlsx
+data/*.csv
+data/*.docx
+data/*.pdf
+data/*.png
+data/test_intake/
 data/e2e_readiness/
 data/error_reports/
 data/email_attachments/
 data/email_intake_downloads/
+data/test_processed_uids.txt
+
+EXAMPLES/
 
 intake_files_processed/
 intake_files_failed/

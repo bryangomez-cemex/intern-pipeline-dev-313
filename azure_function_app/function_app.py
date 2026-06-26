@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+import re
 
 import azure.functions as func
 
@@ -66,3 +67,108 @@ def process_raw_upload(inputblob: func.InputStream):
     except Exception:
         logging.exception("Pipeline failed for triggered blob %s", blob_name)
         raise
+
+
+SQL_SETUP_ORDER = [
+    "00_create_core_legacy_tables.sql",
+    "00_create_dim_interns.sql",
+    "create_full_mvp_pipeline.sql",
+    "fix_file_id_source_file_id_compatibility.sql",
+    "seed_pipeline_validation_rules.sql",
+    "2026-06_package1_document_requirements.sql",
+    "2026-06_resolve_stale_missing_items.sql",
+    "add_corporate_column_aliases.sql",
+    "create_matching_engine_v1.sql",
+    "create_business_powerbi_views.sql",
+    "2026-06_onboarding_schema.sql",
+    "2026-06_schema_simplification.sql",
+    "2026-06_powerbi_no_dax_views.sql",
+    "2026-06_powerbi_refinements.sql",
+    "2026-06_open_positions.sql",
+    "2026-06_cost_columns.sql",
+]
+
+
+def split_sql_batches(script_text):
+    batches = []
+    current = []
+    for line in script_text.splitlines():
+        if re.match(r"^\s*GO\s*$", line, re.IGNORECASE):
+            batch = "\n".join(current).strip()
+            if batch:
+                batches.append(batch)
+            current = []
+            continue
+        current.append(line)
+
+    batch = "\n".join(current).strip()
+    if batch:
+        batches.append(batch)
+    return batches
+
+
+def run_database_setup():
+    sql_dir = APP_ROOT / "sql"
+    results = []
+
+    from azure_clients import get_sql_connection
+
+    with get_sql_connection() as conn:
+        conn.autocommit = True
+        cursor = conn.cursor()
+        for script_name in SQL_SETUP_ORDER:
+            script_path = sql_dir / script_name
+            if not script_path.exists():
+                raise FileNotFoundError(f"Missing SQL setup script: {script_name}")
+
+            batches = split_sql_batches(script_path.read_text(encoding="utf-8"))
+            for batch in batches:
+                cursor.execute(batch)
+
+            results.append({"script": script_name, "batches": len(batches)})
+
+    return results
+
+
+@app.route(route="admin/setup-database", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+def setup_database(req: func.HttpRequest) -> func.HttpResponse:
+    if os.getenv("ENABLE_ADMIN_SQL_SETUP", "").lower() not in {"1", "true", "yes"}:
+        return func.HttpResponse(
+            '{"error":"admin SQL setup is disabled"}',
+            status_code=403,
+            mimetype="application/json",
+        )
+
+    try:
+        import json
+
+        return func.HttpResponse(
+            json.dumps({"status": "ok", "scripts": run_database_setup()}),
+            status_code=200,
+            mimetype="application/json",
+        )
+    except Exception as exc:
+        logging.exception("Admin SQL setup failed")
+        import json
+
+        return func.HttpResponse(
+            json.dumps({"status": "error", "error": str(exc)}),
+            status_code=500,
+            mimetype="application/json",
+        )
+
+
+@app.schedule(
+    schedule="0 0 5 1 1 *",
+    arg_name="setup_timer",
+    run_on_startup=True,
+    use_monitor=False,
+)
+def setup_database_on_startup(setup_timer: func.TimerRequest):
+    if os.getenv("ENABLE_ADMIN_SQL_SETUP", "").lower() not in {"1", "true", "yes"}:
+        logging.info("Admin SQL setup timer skipped because ENABLE_ADMIN_SQL_SETUP is disabled")
+        return
+
+    logging.warning("Admin SQL setup timer is enabled; running database setup scripts")
+    results = run_database_setup()
+    logging.warning("Admin SQL setup timer completed: %s", results)

@@ -172,10 +172,10 @@ def detect_missing_data_for_row(canonical_row, process_type_id):
             missing_items.append(missing_item("DataField", "END_DATE", "Active intern is missing end date.", "Error"))
 
         if not clean_value(canonical_row.get("oi_hc")):
-            missing_items.append(missing_item("BusinessRule", "OI_HC", "Missing OI HC.", "Error"))
+            missing_items.append(missing_item("BusinessRule", "OI_HC", "Missing OI HC.", "Warning"))
 
         if not clean_value(canonical_row.get("cc_hc")):
-            missing_items.append(missing_item("BusinessRule", "CC_HC", "Missing CC HC.", "Error"))
+            missing_items.append(missing_item("BusinessRule", "CC_HC", "Missing CC HC.", "Warning"))
 
     if process_type_id == "PROC_EXTENSION":
         if not has_stable_identifier(canonical_row):

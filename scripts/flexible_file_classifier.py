@@ -216,6 +216,11 @@ def detect_file_profile(file_name, extension, sheet_names=None, columns=None):
     canonical_fields = {ALIAS_LOOKUP[col] for col in normalized_columns if col in ALIAS_LOOKUP}
     sheet_text = " ".join(sheet_names or []).lower()
     text = f"{name} {sheet_text}"
+    has_current_intern_shape = (
+        {"employee_number", "cemex_employee_number", "curp", "rfc", "nss"} & canonical_fields
+        and "status" in canonical_fields
+        and {"end_date", "oi_hc", "cc_hc"} & canonical_fields
+    )
 
     if extension == "xlsx":
         suffix_profile = "excel"
@@ -228,7 +233,10 @@ def detect_file_profile(file_name, extension, sheet_names=None, columns=None):
     else:
         return "unknown_file"
 
-    if any(token in text for token in ["requisition", "requisicion", "requisición", "alta", "baja", "extension", "extendimiento", "posicion", "posición", "position"]):
+    if has_current_intern_shape:
+        return f"current_interns_{suffix_profile}"
+
+    if any(token in text for token in ["requisition", "requisicion", "requisición", "alta", "extension", "extendimiento", "posicion", "posición", "position"]):
         return "requisition_excel" if extension == "xlsx" else "generic_csv"
 
     if any(token in text for token in ["accepted", "accepted hires", "new hire", "new_hire", "hires", "contratados", "ingresos"]):
@@ -239,9 +247,6 @@ def detect_file_profile(file_name, extension, sheet_names=None, columns=None):
 
     if {"full_name", "start_date", "end_date"} & canonical_fields:
         return f"accepted_hires_{suffix_profile}" if extension == "xlsx" else "generic_csv"
-
-    if {"employee_number", "cemex_employee_number", "status"} & canonical_fields and {"end_date", "oi_hc", "cc_hc"} & canonical_fields:
-        return f"current_interns_{suffix_profile}"
 
     return "generic_excel" if extension == "xlsx" else "generic_csv"
 

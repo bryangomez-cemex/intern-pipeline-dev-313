@@ -14,6 +14,8 @@
     "SEND_EMAILS": "false",
     "EMAIL_DRY_RUN": "true",
     "DEV_EMAIL_OVERRIDE": "dev-only@example.com",
+    "DOC_INTEL_ENDPOINT": "https://your-document-intelligence.cognitiveservices.azure.com",
+    "DOC_INTEL_KEY": "<document-intelligence-key>",
     "GRAPH_TENANT_ID": "<cemex-entra-tenant-id>",
     "GRAPH_CLIENT_ID": "<app-registration-client-id>",
     "GRAPH_CLIENT_SECRET": "<app-registration-client-secret>",
