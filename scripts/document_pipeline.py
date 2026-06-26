@@ -198,27 +198,36 @@ def process_candidate_document(local_path, filename, meta=None):
     cur = conn.cursor()
     try:
         intern_id = _match_candidate(cur, meta, candidate_name_hint=filename)
-        cand_name = None
-        if intern_id:
-            cur.execute("SELECT nombre_completo FROM dim_interns WHERE intern_id=?", intern_id)
-            row = cur.fetchone()
-            cand_name = row[0] if row else None
-        name_match = _identity_match(cand_name, filename, text) if cand_name else None
 
+        # Identify the owner from the document CONTENT (not by forcing the name into
+        # the file): read the CURP from the document and, if we still don't know whose
+        # it is, match the candidate by that CURP.
         extracted = {}
-        problems = []
-        if name_match is False:
-            problems.append(f"el nombre del candidato no aparece en {dtype}")
         if dtype == "curp" and text:
             m = re.search(r"[A-Z]{4}[0-9]{6}[HM][A-Z]{5}[0-9A-Z][0-9]", text.upper().replace(" ", ""))
             if m:
                 extracted["curp"] = m.group(0)
-                if intern_id:
-                    cur.execute("SELECT curp FROM dim_interns WHERE intern_id=?", intern_id)
-                    rr = cur.fetchone()
-                    alta_curp = (rr[0] or "").upper() if rr and rr[0] else ""
-                    if alta_curp and alta_curp != extracted["curp"]:
-                        problems.append(f"la CURP del documento ({extracted['curp']}) no coincide con el alta ({alta_curp})")
+        if not intern_id and extracted.get("curp"):
+            cur.execute("SELECT TOP 1 intern_id FROM dim_interns WHERE UPPER(curp) = ?", extracted["curp"])
+            rr = cur.fetchone()
+            if rr:
+                intern_id = rr[0]
+
+        cand_name, alta_curp = None, ""
+        if intern_id:
+            cur.execute("SELECT nombre_completo, curp FROM dim_interns WHERE intern_id=?", intern_id)
+            row = cur.fetchone()
+            if row:
+                cand_name = row[0]
+                alta_curp = (row[1] or "").upper() if row[1] else ""
+
+        # Name presence is informational only (stored as name_match), never a blocker.
+        name_match = _identity_match(cand_name, filename, text) if cand_name else None
+
+        problems = []
+        # A CURP that contradicts the alta is still a real problem.
+        if extracted.get("curp") and alta_curp and alta_curp != extracted["curp"]:
+            problems.append(f"la CURP del documento ({extracted['curp']}) no coincide con el alta ({alta_curp})")
         if dtype == "constancia" and text:
             m = re.search(r"(anticipated graduation|graduation date|fecha de graduaci[oó]n)[:\s]*([A-Za-z0-9 ,/]+)", text, re.I)
             if m:
