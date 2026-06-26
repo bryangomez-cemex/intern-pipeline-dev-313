@@ -39,8 +39,10 @@ COPARMEX_RECIPIENT_EMAILS = os.getenv("COPARMEX_RECIPIENT_EMAILS", "")
 
 
 def _parse_emails(value):
-    """Comma-separated env list → cleaned list of emails (trim, drop empties)."""
-    return [e.strip() for e in (value or "").split(",") if e.strip()]
+    """Email list env var → cleaned emails. Accepts comma, semicolon, or newline
+    separators (Outlook commonly uses ';'); trims whitespace and drops empties."""
+    normalized = (value or "").replace(";", ",").replace("\n", ",")
+    return [e.strip() for e in normalized.split(",") if e.strip()]
 
 
 def _text_to_html(text):
