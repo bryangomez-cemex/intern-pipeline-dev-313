@@ -53,13 +53,17 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 
 ## Open ideas / TODO
 
-- **Upload `archive/templates/alta_coparmex.xlsx`** to storage — Paquete 1 and the
-  Coparmex email reference it as an attachment but the blob doesn't exist yet, so it
-  is silently skipped. Bryan to provide the blank Coparmex alta file.
-- **`importe_total` semantics**: `vw_powerbi_interns_status.importe_total` is currently
-  derived from `salario_mensual` (monthly salary), not the spreadsheet's `ImporteTotal`
-  (total company cost). Salary now correctly comes from `SalarioMensual`. Confirm with
-  Bryan whether `importe_total` should instead store the real `ImporteTotal` column.
+- **Re-upload the full roster** (W1-PRACTICANTES with all 302 + amount columns) so
+  `importe` (pay) and `importe_total` (company cost) populate exactly for everyone.
+  This session added the cost columns/views and backfilled the rows in the local
+  sample; the rest use a `salario_mensual x 1.1` (comision factor) approximation until
+  re-synced. Cost model: `Importe`=`ImporteSinComision`=intern pay; `ImporteTotal`=
+  total company cost.
+- **CI deploy on `main` fails** (`Azure/functions-action` + publish-profile on this Flex
+  app — 5s failure; couldn't read Actions logs to confirm cause). Deploys are done via
+  `az ... config-zip --build-remote` (works). To fix CI properly, configure OIDC
+  (`azure/login`) + `az functionapp deployment`, which needs a service principal /
+  federated credential (app registration may be restricted in the CEMEX tenant).
 - **Custom email domain**: verify `cemex.com` in ACS (needs DNS records) to send from a
   `@cemex.com` address and improve deliverability. Needs DNS access Bryan doesn't have.
 - **Open positions → process type**: `dim_open_positions` snapshot is a separate path,
@@ -69,8 +73,8 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
   expiring live via the Power BI views and detects bajas on sync (now emailing RH).
   `scripts/send_expired_active_contracts_email.py` exists for a one-off report; a
   scheduled (e.g. weekly) digest email to RH could be wired if wanted.
-- **Power BI URL** (`POWERBI_DASHBOARD_URL`) is still the `<intern-dashboard>` placeholder
-  and appears in real HR emails — set it to the real report URL.
+- (done) `POWERBI_DASHBOARD_URL` set to the real report; onboarding emails render a
+  clickable "PowerBI - Practicantes" hyperlink (via the `{{POWERBI_LINK}}` token).
 - Consider resolving `fact_intern_missing_items` BusinessRule rows in the pipeline when
   matching fills the field (today they stay Open and are only reframed as "Resuelta" in
   the exceptions view).
@@ -98,6 +102,11 @@ Big batch of changes (all committed; SQL views applied live; code deployed):
   CEMEX"); app `ACS_SENDER_EMAIL` updated.
 - Earlier same day: ACS email service + attachments, baja live-send, system behavior
   reference (`docs/system_behavior_reference.md`), Flex deploy fix. See git log + PR #1.
+- Follow-up tweaks (same day): cost columns `importe`/`importe_total` (real ImporteTotal
+  = company cost, Importe = intern pay) + view + backfill; Coparmex template uploaded to
+  `archive/templates/alta_coparmex.xlsx`; Power BI hyperlink + `POWERBI_DASHBOARD_URL`
+  set; sender `practicantes@` confirmed. **PR #1 merged to `main`** — the app is live via
+  `az`; the CI publish-profile deploy on `main` fails (see Open ideas).
 
 ### (template for the next agent)
 ### YYYY-MM-DD — <Agent>
