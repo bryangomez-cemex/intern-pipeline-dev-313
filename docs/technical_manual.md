@@ -1,249 +1,200 @@
-# Intern System Pipeline Technical Manual
+# Manual tecnico - Sistema de practicantes CEMEX
 
-Version: 2026-06-25  
-Environment documented: Azure dev resources used for the CEMEX intern automation pipeline  
-Repository: `/Users/bryangomezcemex/intern-system-pipeline`
+Version: 2026-06-26
+Ambiente documentado: Azure dev/productivo controlado para automatizacion de practicantes
+Repositorio: `/Users/bryangomezcemex/intern-system-pipeline`
+Owner operativo: Bryan Gomez, CEMEX HR
 
-## 1. Purpose
+Este manual esta escrito en espanol. Los nombres de servicios, variables de entorno,
+tablas, vistas, columnas, comandos y archivos se mantienen en ingles cuando ese es
+su nombre real en Azure, SQL, GitHub o el codigo.
 
-This system automates HR intern intake, onboarding document handling, current intern database updates, requisition matching, data validation, and Power BI reporting.
+## 1. Objetivo del sistema
 
-The intended business flow is:
+El sistema automatiza el ciclo de vida de practicantes para CEMEX HR:
 
-1. HR or an automated mailbox receives an email with files.
-2. Attachments are uploaded to Azure Blob Storage under `raw-uploads`.
-3. Azure Function detects the blob and runs the Python pipeline.
-4. The pipeline classifies the file, extracts data, validates rows, enriches org fields, and updates Azure SQL.
-5. Azure SQL views expose clean reporting tables for Power BI.
-6. Power BI Service refreshes and shows HR dashboards.
+- Recibe archivos desde correo, carga manual o procesos programados.
+- Guarda los archivos en Azure Blob Storage.
+- Procesa cada archivo con Azure Functions y Python.
+- Clasifica requisiciones, listas de altas, bases actuales, documentos y vacantes abiertas.
+- Extrae datos de Excel, CSV, DOCX, PDF e imagenes.
+- Usa Azure AI Document Intelligence cuando un PDF escaneado o imagen no tiene texto legible.
+- Actualiza Azure SQL con practicantes, documentos, requisiciones, validaciones, comunicaciones y eventos.
+- Enriquece campos organizacionales usando reglas de matching.
+- Envia correos reales por Azure Communication Services cuando `EMAIL_SIMULATION_MODE=false`.
+- Expone vistas limpias para Power BI sin requerir DAX complejo.
 
-Short architecture:
-
-```text
-Email intake / Gmail dev intake / manual Azure upload
-    -> Azure Blob Storage raw-uploads
-    -> Azure Function blob trigger
-    -> Python pipeline
-    -> Azure SQL operational tables
-    -> Azure SQL reporting views
-    -> Power BI Service
-```
-
-## 2. Current Stack
-
-### Cloud
-
-- Azure Subscription: `Azure subscription 1`
-- Azure Subscription ID: `a3d54e37-bfef-4efb-8f09-f6d848b499c7`
-- Azure Tenant ID: `6ee19001-d0c4-45f8-af8b-ff00f16d07e1`
-- Azure Resource Group: `rg-intern-pipeline-dev`
-- Azure Function App: `mex-intern-pipeline-func-win`
-- Azure Function Host: `mex-intern-pipeline-func-win-axgkagdsdgfbebc6.centralus-01.azurewebsites.net`
-- Azure SQL Server: `rg-intern-system-devbge.database.windows.net`
-- Azure SQL Database: `rg-intern-system-dev`
-- Azure Storage Account: `rginternpipelinedevb961`
-- Azure Blob Storage containers:
-  - `raw-uploads`
-  - `error-reports`
-  - `archive`
-  - processed/failed blob paths are used by the pipeline
-- Azure AI Document Intelligence:
-  - Function App settings confirmed:
-    - `DOC_INTEL_ENDPOINT`
-    - `DOC_INTEL_KEY`
-  - Values exist in Azure Function app settings. Do not print or commit the values.
-
-### Runtime
-
-- Python
-- Azure Functions Python model
-- Azure SDK for Blob/Identity
-- `pyodbc` for Azure SQL
-- `pandas` / `openpyxl` for Excel
-- `pypdf` for PDFs with text layers
-- Azure AI Document Intelligence REST call for scanned PDFs/images
-- Power BI Service for reports
-
-### Local Development
-
-- Workspace: `/Users/bryangomezcemex/intern-system-pipeline`
-- Python virtual environment: `.venv`
-- Local config: `.env` is ignored by git and must never be committed.
-- Git branch at time of manual: `codex/intern-pipeline-production-readiness`
-
-## 3. Repository Layout
+Flujo resumido:
 
 ```text
-azure_function_app/
-  function_app.py
-  host.json
-  requirements.txt
-  local.settings.example.json
-  scripts/
-    pipeline_service.py
-    azure_clients.py
-    app_config.py
-    flexible_file_classifier.py
-    lifecycle_requirements.py
-    matching_engine.py
-    document_pipeline.py
-    onboarding_pipeline.py
-    requisition_parser.py
-
-scripts/
-  pipeline_service.py
-  azure_clients.py
-  app_config.py
-  flexible_file_classifier.py
-  lifecycle_requirements.py
-  matching_engine.py
-  document_pipeline.py
-  onboarding_pipeline.py
-  requisition_parser.py
-  intake_gmail_attachments.py
-  sync_function_modules.py
-  smoke_e2e_pipeline.py
-  deployment_readiness_e2e.py
-  check_function_readiness.py
-  sql/
-    00_create_core_legacy_tables.sql
-    00_create_dim_interns.sql
-    create_full_mvp_pipeline.sql
-    fix_file_id_source_file_id_compatibility.sql
-    seed_pipeline_validation_rules.sql
-    2026-06_package1_document_requirements.sql
-    2026-06_resolve_stale_missing_items.sql
-    add_corporate_column_aliases.sql
-    create_matching_engine_v1.sql
-    create_business_powerbi_views.sql
-    2026-06_onboarding_schema.sql
-    2026-06_schema_simplification.sql
-    2026-06_powerbi_no_dax_views.sql
-
-docs/
-  technical_manual.md
-  email_alert_recommendations.md
-  power_bi_dashboard.md
-  power_bi_no_dax_5_pages.md
-  schema_simplification.md
-  lifecycle_requirements.md
-  full_automation_deployment_guide.md
+Email / Gmail intake / carga manual
+  -> Azure Blob Storage: raw-uploads
+  -> Azure Function: process_raw_upload
+  -> Python pipeline
+  -> Azure SQL operational tables
+  -> Azure SQL Power BI views
+  -> Power BI Service
+  -> Correos ACS cuando aplica
 ```
 
-The files under `azure_function_app/scripts/` are synced copies used for deployment. The source-of-truth development files are under `scripts/`. Run `scripts/sync_function_modules.py` before deploying the Function App.
+## 2. Stack completo
 
-## 4. Azure Function
+### Lenguajes y runtime
 
-### Function Trigger
+- Python 3.11 en Azure Functions.
+- SQL / T-SQL en Azure SQL Database.
+- Markdown para manuales y handoff operativo.
+- Bash / Azure CLI para operacion y despliegue.
 
-File: `azure_function_app/function_app.py`
+### Librerias principales de Python
 
-The Function uses a Blob Trigger:
+- `azure-functions`
+- `azure-storage-blob`
+- `azure-identity`
+- `azure-communication-email`
+- `pandas`
+- `openpyxl`
+- `pyodbc`
+- `pypdf`
+- `python-dotenv`
+- `requests`
+
+### Azure
+
+- Azure Functions Flex Consumption.
+- Azure Blob Storage.
+- Azure SQL Database.
+- Azure AI Document Intelligence.
+- Azure Communication Services Email.
+- Azure Application Insights / Azure Monitor.
+- Azure Event Grid para el trigger de blobs.
+- Azure Container Instances para utilidades temporales de SQL cuando se necesita.
+- Azure CLI.
+- Azure Oryx Remote Build para build remoto del Function App.
+
+### BI y operaciones
+
+- Power BI Service.
+- Azure SQL connector en Power BI.
+- SQL views para reporting sin DAX.
+- Git y GitHub.
+- GitHub Actions.
+- Docker o tooling containerizado para utilidades puntuales.
+
+## 3. Recursos actuales en Azure
+
+No se deben documentar ni imprimir secrets. Los valores sensibles viven en Azure
+Function App settings, `.env` local o recursos de Azure.
+
+| Tipo | Nombre actual | Uso |
+|---|---|---|
+| Subscription | `a3d54e37-bfef-4efb-8f09-f6d848b499c7` | Subscription CEMEX donde vive el sistema |
+| Tenant | `6ee19001-...` | Tenant corporativo |
+| Resource Group | `rg-intern-pipeline-dev` | Contenedor de recursos |
+| Function App | `mex-intern-pipeline-func-win` | Ejecucion del pipeline |
+| Plan | Flex Consumption | Escala bajo demanda |
+| Azure SQL Server | `rg-intern-system-devbge.database.windows.net` | Servidor SQL |
+| Azure SQL DB | `rg-intern-system-dev` | Base de datos del sistema |
+| Storage Account | `rginternpipelinedevb961` | Archivos de entrada, archivo y reportes |
+| Blob container | `raw-uploads` | Entrada oficial de archivos |
+| Blob container | `archive` | Archivos procesados, templates y archivo historico |
+| Blob container | `error-reports` | Reportes de error |
+| Document Intelligence | `docintel-intern-pipeline-dev` | OCR / lectura de documentos escaneados |
+| ACS Communication | `intern-pipeline-comm-dev` | Envio de correos |
+| ACS Email Service | `intern-pipeline-email-dev` | Servicio de correo |
+| Application Insights | `mex-intern-pipeline-func-win` | Logs y monitoreo |
+
+Estado importante de correo live:
+
+- `EMAIL_SIMULATION_MODE=false` en el Function App live, por lo tanto los correos
+  se envian realmente.
+- `RH_RECIPIENT_EMAILS` esta apuntando a Bryan para pruebas controladas.
+- La gestion Coparmex ya no usa un destinatario externo separado; se envia a RH
+  para revision rapida y reenvio manual a Coparmex.
+- El sender verificado actual es `practicantes@...azurecomm.net`.
+- El dominio custom `cemex.com` existe en ACS, pero esta pendiente de verificacion
+  DNS antes de poder usar un remitente `@cemex.com`.
+
+## 4. Estructura del repositorio
 
 ```text
-path = raw-uploads/{name}
-connection = AZURE_STORAGE_CONNECTION_STRING
-source = EVENT_GRID
+.
+├── AGENT_HANDOFF.md
+├── README.md
+├── azure_function_app/
+│   ├── function_app.py
+│   ├── host.json
+│   ├── requirements.txt
+│   ├── local.settings.example.json
+│   ├── scripts/
+│   └── sql/
+├── scripts/
+│   ├── pipeline_service.py
+│   ├── onboarding_pipeline.py
+│   ├── document_pipeline.py
+│   ├── email_service.py
+│   ├── flexible_file_classifier.py
+│   ├── matching_engine.py
+│   ├── lifecycle_requirements.py
+│   ├── azure_clients.py
+│   ├── app_config.py
+│   ├── requisition_parser.py
+│   ├── intake_gmail_attachments.py
+│   ├── process_blob_file.py
+│   ├── run_intake_pipeline.py
+│   ├── check_function_readiness.py
+│   ├── smoke_e2e_pipeline.py
+│   └── sql/
+├── docs/
+│   ├── technical_manual.md
+│   ├── hr_manual.md
+│   ├── system_behavior_reference.md
+│   ├── power_bi_no_dax_5_pages.md
+│   ├── power_bi_dashboard.md
+│   └── email_alert_recommendations.md
+└── data/
 ```
 
-The handler:
+Regla de codigo:
 
-1. Receives a blob event.
-2. Strips the `raw-uploads/` container prefix from the blob name.
-3. Ignores archive/processed/failed/error-report paths.
-4. Calls:
+- `scripts/` es la fuente de verdad para modulos Python.
+- `azure_function_app/scripts/` contiene copias usadas por el Function App.
+- Despues de editar un modulo bajo `scripts/`, correr:
 
-```python
-process_blob_by_name(
-    source_container="raw-uploads",
-    source_blob_name=blob_name,
-    run_type="blob_trigger",
-)
+```bash
+.venv/bin/python scripts/sync_function_modules.py
 ```
 
-### Required Function App Settings
+## 5. Componentes principales
 
-Never commit real values.
+### 5.1 Azure Function
+
+Archivo: `azure_function_app/function_app.py`
+
+Funcion principal:
 
 ```text
-AZURE_STORAGE_CONNECTION_STRING
-RAW_UPLOADS_CONTAINER=raw-uploads
-ERROR_REPORTS_CONTAINER=error-reports
-ARCHIVE_CONTAINER=archive
-AZURE_SQL_SERVER
-AZURE_SQL_DATABASE
-AZURE_SQL_CONNECTION_STRING
-AZURE_SQL_AUTH_MODE=sql_password or managed_identity
-EMAIL_MODE=simulation
-SEND_EMAILS=false
-DEV_EMAIL_OVERRIDE
-DOC_INTEL_ENDPOINT
-DOC_INTEL_KEY
-AzureWebJobsFeatureFlags=EnableWorkerIndexing
-ENABLE_ADMIN_SQL_SETUP=false
+process_raw_upload
 ```
 
-Optional/future email settings:
+Trigger:
 
 ```text
-GRAPH_TENANT_ID
-GRAPH_CLIENT_ID
-GRAPH_CLIENT_SECRET
-GRAPH_SENDER_USER
-EMAIL_MODE=graph_draft or graph_send
+Blob trigger con Event Grid
+Container: raw-uploads
+Path: raw-uploads/{name}
+Connection: AZURE_STORAGE_CONNECTION_STRING
 ```
 
-Keep `EMAIL_MODE=simulation` until real recipient approval is complete.
+Comportamiento:
 
-### SQL Setup For Fresh Azure Databases
+1. Recibe el evento de creacion del blob.
+2. Limpia el nombre para quitar el prefijo del container.
+3. Ignora rutas internas.
+4. Llama `process_blob_by_name(...)` en `pipeline_service.py`.
+5. Registra exito o error en logs de Azure Functions.
 
-For a new empty Azure SQL database, run scripts in this order:
-
-```text
-scripts/sql/00_create_core_legacy_tables.sql
-scripts/sql/00_create_dim_interns.sql
-scripts/sql/create_full_mvp_pipeline.sql
-scripts/sql/fix_file_id_source_file_id_compatibility.sql
-scripts/sql/seed_pipeline_validation_rules.sql
-scripts/sql/2026-06_package1_document_requirements.sql
-scripts/sql/2026-06_resolve_stale_missing_items.sql
-scripts/sql/add_corporate_column_aliases.sql
-scripts/sql/create_matching_engine_v1.sql
-scripts/sql/create_business_powerbi_views.sql
-scripts/sql/2026-06_onboarding_schema.sql
-scripts/sql/2026-06_schema_simplification.sql
-scripts/sql/2026-06_powerbi_no_dax_views.sql
-```
-
-The `00_*` scripts create base compatibility tables that the older environment
-already had but a brand-new database does not. Azure SQL setup was verified on
-2026-06-25 with 30 dbo tables, 41 dbo views, and all required `vw_powerbi_*`
-views present.
-
-## 5. Blob Storage Contract
-
-### Input Container
-
-All source files enter through:
-
-```text
-raw-uploads
-```
-
-Recommended blob name patterns:
-
-```text
-current_interns/YYYY/MM/file.xlsx
-requisitions/YYYY/MM/file.docx
-candidate_docs/YYYY/MM/file.pdf
-unknown/YYYY/MM/file.xlsx
-```
-
-The pipeline can classify files even when the folder is not perfect, but descriptive names improve auditability.
-
-### Ignored Paths
-
-The Function ignores blobs starting with:
+Rutas ignoradas:
 
 ```text
 archive/
@@ -253,932 +204,753 @@ error-reports/
 .
 ```
 
-### Archive / Failed Behavior
+Tambien existen funciones HTTP administrativas para setup de SQL:
 
-When processing succeeds, the pipeline records run metadata and archives/moves the source according to the current pipeline behavior.
+- `setup_database`
+- `setup_database_on_startup`
 
-When processing fails, it records the failed run and stores error information in SQL and/or error-report paths.
+Estas rutas solo deben usarse si `ENABLE_ADMIN_SQL_SETUP` esta activado
+intencionalmente.
 
-## 6. Main Pipeline Behavior
+### 5.2 Pipeline principal
 
-File: `scripts/pipeline_service.py`
+Archivo: `scripts/pipeline_service.py`
 
-Primary entrypoints:
+Responsabilidades:
 
-```python
-process_blob_by_name(source_container, source_blob_name, run_type="manual")
-process_next_blob(run_type="manual")
-run_pipeline_for_uploaded_file(source_container, source_blob_name, run_type="blob_trigger")
-```
+- Leer blobs desde `raw-uploads`.
+- Evitar reprocesamiento con guardas de blob procesado.
+- Clasificar archivos.
+- Extraer filas y campos.
+- Hacer upsert en Azure SQL.
+- Detectar bajas por cambio de status.
+- Crear eventos de ciclo de vida.
+- Registrar validaciones y faltantes.
+- Preparar y enviar comunicaciones cuando aplica.
+- Crear paquetes o referencias de documentos.
 
-High-level sequence:
+Funciones clave:
 
-1. Open SQL and Blob clients.
-2. Check if blob was already processed.
-3. Download blob to local temp/work area.
-4. Classify file with `flexible_file_classifier.py`.
-5. Extract tabular/document content.
-6. Normalize columns through canonical aliases.
-7. Validate rows.
-8. Match to interns/requisitions.
-9. Enrich org hierarchy fields.
-10. Upsert interns/requisitions/doc facts.
-11. Log lifecycle events, validations, missing items, and pipeline run summary.
-12. Move/archive blob and update processed blob record.
+- `process_blob_by_name`
+- `process_next_blob`
+- `process_all_pending_blobs`
+- `run_pipeline_for_uploaded_file`
+- `resolve_group_recipients`
+- `prepare_baja_communication`
+- `build_baja_email_subject`
+- `build_baja_email_body`
 
-## 7. File Classification
+### 5.3 Onboarding
 
-File: `scripts/flexible_file_classifier.py`
+Archivo: `scripts/onboarding_pipeline.py`
 
-The classifier maps files to business process types. Important outputs:
+Responsabilidades:
 
-- `file_profile_id`
-- `technical_profile`
-- `business_pipeline_type`
-- `process_type`
-- `needs_review`
+- Procesar requisiciones.
+- Procesar listas de nuevos ingresos de RH.
+- Enviar Paquete 1.
+- Procesar documentos del candidato.
+- Procesar convenio y NDA.
+- Enviar correos de avance.
+- Preparar informacion para Coparmex.
+- Procesar la lista de posiciones abiertas.
 
-Common process mappings:
-
-```text
-accepted_hires_excel      -> PROC_NEW_HIRE
-requisition_excel/docx    -> PROC_REQUISITION
-current_interns_excel/csv -> PROC_CURRENT_SYNC
-generic_pdf/image         -> PROC_DOCUMENT_REFRESH or unknown
-invalid executable        -> invalid_file / needs review
-```
-
-The classifier uses:
-
-- File extension
-- File name
-- Sheet names
-- Detected columns
-- Known corporate aliases
-- Content signals
-
-## 8. Column Alias And Normalization
-
-SQL config:
+Tipos principales que reconoce:
 
 ```text
-dim_canonical_fields
-dim_column_aliases
+requisicion
+hr_new_hires
+alta_candidate
+open_positions
+documentos
 ```
 
-Script:
+### 5.4 Documentos
 
-```text
-scripts/sql/add_corporate_column_aliases.sql
-```
+Archivo: `scripts/document_pipeline.py`
 
-Examples:
+Responsabilidades:
 
-```text
-NUMERO              -> employee_number
-NOMBRE              -> full_name
-VICEPRESIDENCIA     -> vp_hc
-UBICACION           -> location
-EDOUBICACION        -> location_state
-CIA                 -> company_code
-CIASTR              -> company
-CC                  -> cc_hc
-ORDENINTERNA        -> oi_hc
-EMAIL               -> email
-ImporteTotal        -> salary
-RAZON SOCIAL HC     -> company
-UBICACIÓN HC        -> location
-ESTADO UBICACIÓN HC -> location_state
-```
+- Clasificar documentos por filename y contenido.
+- Leer texto de PDFs con capa de texto.
+- Usar Document Intelligence para PDFs escaneados o imagenes.
+- Asociar documentos con el practicante correcto.
+- Validar CURP y otros datos cuando estan disponibles.
+- Detectar documentos faltantes del Paquete 1.
 
-## 9. Intern Matching
-
-File: `scripts/matching_engine.py`
-
-Stable identifiers are strongest:
-
-- Employee number
-- CEMEX employee number
-- Email
-- CURP
-- RFC
-- NSS
-
-Match confidence categories:
-
-- `HIGH`: strong identifier match; no review needed.
-- `MEDIUM`: secondary evidence; review recommended.
-- `LOW`: no reliable match.
-- `CONFLICT`: multiple possible matches or conflicting identifiers.
-
-## 10. Requisition Matching
-
-Primary key:
-
-```text
-requisition_id
-```
-
-The system also uses file/email/body metadata when available, but `requisition_id` is the main reliable key.
-
-Requisitions are stored in:
-
-```text
-dim_requisitions
-```
-
-Power BI vacantes logic:
-
-```text
-vw_powerbi_vacantes
-```
-
-A requisition disappears from open vacancies when an intern exists with the same `requisition_id`.
-
-## 11. CEMEX Org Relationship Logic
-
-Practical hierarchy:
-
-```text
-CIA HC -> VP HC -> CC HC -> OI HC
-```
-
-`JefeInmediato` is not the official hierarchy, but it is a strong matching signal.
-
-Strong relationships implemented:
-
-```text
-JefeInmediato -> VP HC
-JefeInmediato -> CC HC
-JefeInmediato -> OI HC
-JefeInmediato -> CIA HC
-OI HC          -> VP HC
-OI HC          -> CC HC
-CC HC          -> VP HC
-CC HC          -> CIA HC
-```
-
-Important functions:
-
-```python
-clean_org_value
-org_key
-org_value_variants
-manager_key
-best_unique_candidate
-query_dim_intern_relation
-query_manager_assignment_relation
-suggest_org_field
-enrich_org_fields
-upsert_manager_assignment_from_row
-```
-
-Operational table:
-
-```text
-dim_manager_assignments
-```
-
-Reporting view:
-
-```text
-vw_canonical_org_assignments
-```
-
-Current data quality status after cleanup:
-
-```text
-Missing VP HC: 0
-Missing CIA HC: 0
-Missing CC HC: 0
-Missing OI HC: 0
-Missing manager: 0
-Duplicate employee numbers: 0
-```
-
-## 11.1 Baja Automation
-
-The current-intern sync detects when an existing intern changes from active to inactive/baja.
-
-Active status values:
-
-```text
-Activo
-active
-ST002
-```
-
-Inactive/baja status values:
-
-```text
-Baja
-Inactivo
-inactive
-ST003
-ST004
-```
-
-When the transition is:
-
-```text
-active -> inactive/baja
-```
-
-the pipeline:
-
-1. Updates `dim_interns.status_id` with the incoming status from the sync file.
-2. Inserts a lifecycle event:
-
-```text
-fact_intern_lifecycle_events.event_type = baja_requested
-fact_intern_lifecycle_events.event_status = Prepared
-fact_intern_lifecycle_events.process_type_id = PROC_BAJA
-```
-
-3. Creates an HR communication:
-
-```text
-fact_communications.communication_type = Baja De Practicante
-fact_communications.recipient_group = HR
-fact_communications.status = Prepared
-```
-
-Email subject format:
-
-```text
-Baja De Practicante - {NOMBRE COMPLETO}
-```
-
-Email body includes:
-
-```text
-Fecha de nacimiento
-Correo personal
-Universidad
-Carrera
-Semestre
-Fecha de graduacion
-CEMEX-ID
-Correo institucional CEMEX
-Vicepresidencia
-Nombre del proyecto
-Jefe directo
-AIRH
-Ubicacion UDN
-Compania
-OI
-CC
-Sueldo
-Fecha de ingreso
-Fecha fin
-Estado de practicante
-Nombre completo
-```
-
-The communication is prepared automatically. Real delivery still follows the configured communication sender safety controls.
-
-## 12. Document Handling
-
-Files:
-
-```text
-scripts/document_pipeline.py
-azure_function_app/scripts/document_pipeline.py
-```
-
-The document pipeline:
-
-1. Classifies document type by filename.
-2. Extracts text from PDFs/docx when possible.
-3. Uses Document Intelligence OCR fallback for scanned PDFs/images.
-4. Matches document to candidate/intern.
-5. Tracks received/missing/review status in SQL.
-
-### Document Intelligence
-
-Function App app settings confirmed:
-
-```text
-DOC_INTEL_ENDPOINT exists
-DOC_INTEL_KEY exists
-```
-
-OCR method:
+Document Intelligence usa el modelo:
 
 ```text
 prebuilt-read
 api-version=2023-07-31
 ```
 
-Behavior:
+### 5.5 Matching organizacional
 
-- If PDF has a text layer, local PDF extraction is used.
-- If PDF has little/no text or file is image, Document Intelligence is called.
-- If Document Intelligence is not configured or fails, OCR returns empty text and the pipeline continues best-effort.
+Archivo: `scripts/matching_engine.py`
 
-### Paquete 1
+El sistema usa relaciones de HR para completar o validar campos organizacionales.
 
-Current required Paquete 1 documents:
+Jerarquia principal:
 
 ```text
-ALTA
-CURP
-CONSTANCIA_ESTUDIOS
-IDENTIFICACION
-COMPROBANTE_DOMICILIO
+CIA HC -> VP HC -> CC HC -> OI HC
 ```
 
-Not required:
+`JefeInmediato` no es parte formal de la jerarquia, pero es una senal fuerte de
+matching.
+
+Relaciones fuertes:
 
 ```text
-Professional photo
+JefeInmediato -> VP HC
+JefeInmediato -> CC HC
+JefeInmediato -> OI HC
+OI HC -> VP HC
+OI HC -> CC HC
+CC HC -> VP HC
+CC HC -> CIA HC
 ```
 
-Emergency contact:
+Uso practico:
+
+- Si una fila trae `JefeInmediato`, se usa para sugerir o validar `VP HC`, `CC HC`,
+  `OI HC` y `CIA HC`.
+- Si una fila trae `OI HC`, se usa para inferir `VP HC` y `CC HC` cuando faltan.
+- Si una fila trae `CC HC`, se usa para inferir `VP HC` y `CIA HC` cuando faltan.
+- Si un campo esta vacio, el sistema intenta llenarlo con la relacion mas fuerte
+  disponible para esa fila.
+
+## 6. Tipos de archivos soportados
+
+### 6.1 Requisiciones
+
+Formato esperado:
+
+- DOCX principalmente.
+- Puede venir desde correo con metadata.
+
+Datos importantes:
+
+- `sender_email`
+- `email_subject`
+- `body_fields`
+- `requisition_id` o position id si existe
+
+Resultado:
+
+- Se crea o actualiza una requisicion.
+- Se genera un ID tipo `REQ-YYYY-NNNN` cuando aplica.
+- Se manda confirmacion al solicitante si el flujo esta completo.
+
+### 6.2 Lista de nuevos ingresos de RH
+
+Formato:
+
+- Excel o CSV.
+
+Uso:
+
+- Crear el registro inicial del nuevo practicante.
+- Asociarlo con requisicion / position id cuando existe.
+- Enviar Paquete 1 al correo personal del candidato.
+
+### 6.3 Paquete 1
+
+Nombre de negocio:
 
 ```text
-Captured from email/body text or alta data, not as a separate document.
+Paquete 1
 ```
 
-Config script:
+Documentos requeridos:
+
+- Alta / formato de datos.
+- CURP.
+- Constancia de estudios.
+- Identificacion.
+- Comprobante de domicilio.
+- Acta de nacimiento.
+
+Documentos removidos u opcionales:
+
+- Foto profesional ya no es requerida.
+
+Dato adicional solicitado por email:
+
+- Contacto de emergencia: nombre, parentesco y telefono.
+
+### 6.4 Convenio y NDA
+
+Flujo:
+
+1. RH carga convenio y NDA.
+2. El convenio se envia al candidato solo como copia.
+3. El NDA se debe cargar en DOCX y se envia al candidato para firma.
+4. El candidato regresa solamente el NDA firmado en PDF.
+5. El sistema valida que el NDA firmado sea PDF.
+6. RH recibe aviso con el NDA firmado adjunto.
+
+### 6.5 Base actual de practicantes
+
+Formato:
+
+- Excel o CSV.
+- Ejemplo fuente: W1 / layout de practicantes.
+
+Uso:
+
+- Actualizar activos e inactivos.
+- Detectar cambios de status.
+- Detectar contratos vencidos.
+- Actualizar costos `importe` e `importe_total`.
+- Actualizar campos organizacionales.
+
+Regla de costo:
+
+- `importe` = pago del practicante.
+- `importe_total` = costo total para la compania.
+- Si falta `importe_total`, algunas vistas pueden usar aproximacion basada en
+  `salario_mensual x 1.1` hasta re-subir el roster completo con columnas reales.
+
+### 6.6 Lista de posiciones abiertas
+
+Formato:
+
+- Excel o CSV.
+
+Columnas esperadas:
+
+- `#`
+- `Vacante`
+- `ID Vacante`
+- `Ubicacion`
+- `Promedio Dias Abierto`
+- `Responsable`
+- `AIRH`
+- `Jefe del Puesto`
+- `Estatus General`
+
+Tabla:
 
 ```text
-scripts/sql/2026-06_package1_document_requirements.sql
+dim_open_positions
 ```
 
-Legacy document requirements resolved/deactivated:
+Vista Power BI:
 
 ```text
-CV
-NDA
-ID_INE
-SCHOOL_PROOF
-OFFER_LETTER
-CERTIFICADO
-ACTA_NACIMIENTO as required applicant doc
+vw_powerbi_posiciones_abiertas
 ```
 
-## 13. SQL Database Layers
+Cada upload reemplaza el snapshot actual marcando registros anteriores como
+`is_current = 0` y cargando la nueva version como `is_current = 1`.
 
-The database uses operational tables plus reporting views.
+## 7. Azure Blob Storage
 
-### Operational Tables
-
-Core dimensions:
+Container de entrada:
 
 ```text
-dim_interns
-dim_requisitions
-dim_manager_assignments
-dim_required_document_types
-dim_lifecycle_processes
-dim_canonical_fields
-dim_column_aliases
-dim_validation_rules
-dim_recipient_groups
-dim_communication_templates
+raw-uploads
 ```
 
-Core facts:
+Containers de soporte:
 
 ```text
-fact_pipeline_runs
-fact_processed_blobs
-fact_files
-fact_validations
-fact_hires
-fact_intern_document_status
-fact_intern_documents
-fact_intern_missing_items
-fact_intern_lifecycle_events
-fact_intern_beneficiaries
-fact_communications
-fact_communication_packages
-fact_communication_package_files
-fact_file_classification
-fact_detected_columns
+archive
+error-reports
 ```
 
-Do not drop operational tables during normal reporting cleanup.
-
-### Canonical Views
+Rutas recomendadas:
 
 ```text
-vw_canonical_interns_current
-vw_canonical_intern_documents
-vw_canonical_document_types
-vw_canonical_org_assignments
-vw_canonical_requisitions
-vw_canonical_pipeline_runs
-vw_schema_consolidation_recommendations
+current_interns/YYYY/MM/file.xlsx
+requisitions/YYYY/MM/file.docx
+candidate_docs/YYYY/MM/file.pdf
+open_positions/YYYY/MM/file.xlsx
+unknown/YYYY/MM/file.xlsx
 ```
 
-### Power BI Business Views
+Notas:
+
+- La clasificacion puede funcionar aunque la carpeta no sea perfecta.
+- Nombres descriptivos facilitan auditoria.
+- Los archivos procesados no deben volver a subirse con el mismo nombre si se
+  desea forzar reprocesamiento sin limpiar guardas.
+
+## 8. Azure SQL
+
+### 8.1 Orden de scripts para una base nueva
+
+Los scripts viven en `scripts/sql/` y deben ejecutarse separando batches por `GO`.
+
+Orden actual:
 
 ```text
-vw_powerbi_vacantes
-vw_powerbi_interns_status
-vw_powerbi_costos_practicantes
-vw_powerbi_expired_active_contracts
-vw_powerbi_inactive_interns
-vw_powerbi_vp_capacity
+00_create_core_legacy_tables.sql
+00_create_dim_interns.sql
+create_full_mvp_pipeline.sql
+fix_file_id_source_file_id_compatibility.sql
+seed_pipeline_validation_rules.sql
+2026-06_package1_document_requirements.sql
+2026-06_resolve_stale_missing_items.sql
+add_corporate_column_aliases.sql
+create_matching_engine_v1.sql
+create_business_powerbi_views.sql
+2026-06_onboarding_schema.sql
+2026-06_schema_simplification.sql
+2026-06_powerbi_no_dax_views.sql
+2026-06_powerbi_refinements.sql
+2026-06_open_positions.sql
+2026-06_cost_columns.sql
 ```
 
-### Power BI No-DAX Views
+El Function App tambien mantiene este orden en `SQL_SETUP_ORDER`.
 
-These are designed for Power BI Service without Power BI Desktop/DAX:
+### 8.2 Tablas operativas principales
+
+Nombres importantes:
+
+- `dim_interns`
+- `dim_documents`
+- `dim_document_types`
+- `dim_requisitions`
+- `dim_open_positions`
+- `dim_manager_assignments`
+- `dim_email_recipients`
+- `dim_recipient_groups`
+- `fact_pipeline_runs`
+- `fact_processed_blobs`
+- `fact_validations`
+- `fact_intern_missing_items`
+- `fact_intern_lifecycle_events`
+- `fact_communications`
+- `fact_document_validations`
+- `fact_process_requirements`
+
+La tabla exacta puede variar por compatibilidad historica. Para inventario completo,
+usar:
+
+```sql
+SELECT TABLE_SCHEMA, TABLE_NAME
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_TYPE = 'BASE TABLE'
+ORDER BY TABLE_SCHEMA, TABLE_NAME;
+```
+
+Columnas por tabla:
+
+```sql
+SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+FROM INFORMATION_SCHEMA.COLUMNS
+ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION;
+```
+
+### 8.3 Vistas recomendadas para Power BI
+
+Vistas canonicas:
+
+- `vw_canonical_interns_current`
+- `vw_canonical_intern_documents`
+- `vw_canonical_document_types`
+- `vw_canonical_org_assignments`
+- `vw_canonical_requisitions`
+- `vw_canonical_pipeline_runs`
+
+Vistas operativas / negocio:
+
+- `vw_business_validation_exceptions`
+- `vw_requisitions_status`
+- `vw_communications_status`
+- `vw_hr_actions_today`
+
+Vistas Power BI:
+
+- `vw_powerbi_dashboard_kpis`
+- `vw_powerbi_vp_summary`
+- `vw_powerbi_location_summary`
+- `vw_powerbi_contract_risk`
+- `vw_powerbi_document_status`
+- `vw_powerbi_document_summary`
+- `vw_powerbi_hr_action_queue`
+- `vw_powerbi_vacantes`
+- `vw_powerbi_costos_practicantes`
+- `vw_powerbi_expired_active_contracts`
+- `vw_powerbi_inactive_interns`
+- `vw_powerbi_vp_capacity`
+- `vw_powerbi_posiciones_abiertas`
+
+Las vistas `vw_full_mvp_*` pueden existir por compatibilidad, pero para reportes
+nuevos se deben preferir `vw_powerbi_*` y `vw_canonical_*`.
+
+## 9. Correos
+
+### 9.1 Proveedor
+
+Proveedor actual:
 
 ```text
-vw_powerbi_dashboard_kpis
-vw_powerbi_vp_summary
-vw_powerbi_location_summary
-vw_powerbi_contract_risk
-vw_powerbi_document_status
-vw_powerbi_document_summary
-vw_powerbi_hr_action_queue
+Azure Communication Services Email
 ```
 
-### Legacy Compatibility Views
-
-These remain for compatibility and audit detail:
+Archivo:
 
 ```text
-vw_full_mvp_interns_current
-vw_full_mvp_document_status
-vw_full_mvp_missing_items
-vw_full_mvp_lifecycle_events
-vw_full_mvp_pipeline_runs
-vw_full_mvp_pipeline_summary
-vw_full_mvp_file_classification
-vw_full_mvp_detected_columns
-vw_full_mvp_communication_packages
-vw_full_mvp_package_files
-vw_full_mvp_validation_errors
+scripts/email_service.py
 ```
 
-New reporting should prefer `vw_powerbi_*` and `vw_canonical_*`.
+No se usa Power Automate para el flujo actual. Microsoft Graph y SMTP existen como
+rutas legacy/opcionales, pero el sistema live usa ACS.
 
-## 14. SQL Migration Order
-
-Run SQL in this order for a new or refreshed environment:
+### 9.2 Variables principales
 
 ```text
-scripts/sql/fix_file_id_source_file_id_compatibility.sql
-scripts/sql/create_full_mvp_pipeline.sql
-scripts/sql/seed_pipeline_validation_rules.sql
-scripts/sql/2026-06_package1_document_requirements.sql
-scripts/sql/2026-06_resolve_stale_missing_items.sql
-scripts/sql/add_corporate_column_aliases.sql
-scripts/sql/create_matching_engine_v1.sql
-scripts/sql/create_business_powerbi_views.sql
-scripts/sql/2026-06_schema_simplification.sql
-scripts/sql/2026-06_powerbi_no_dax_views.sql
-scripts/sql/2026-06_onboarding_schema.sql
+EMAIL_PROVIDER=azure_communication_services
+EMAIL_SIMULATION_MODE=true|false
+ACS_CONNECTION_STRING=<secret>
+ACS_SENDER_EMAIL=<verified sender>
+ACS_SENDER_NAME=Programa de Practicantes CEMEX
+RH_RECIPIENT_EMAILS=<lista de correos>
+POWERBI_DASHBOARD_URL=<url del reporte>
 ```
 
-All current scripts are intended to be idempotent or safe to rerun. Avoid manual `DROP TABLE` operations unless a cutover plan exists.
+Regla de seguridad:
 
-## 15. Current Production-Like Data Status
+- `EMAIL_SIMULATION_MODE=true` nunca envia correos reales.
+- `EMAIL_SIMULATION_MODE=false` envia correos reales.
+- En el ambiente live actual esta en `false`, por lo que cualquier deploy o prueba
+  que dispare flujo de email puede mandar correos reales.
 
-After the latest cleanup:
+### 9.3 Correos principales del flujo
+
+| Evento | Destinatario | Subject base | Estado |
+|---|---|---|---|
+| Requisicion recibida | Solicitante | `Requisición recibida - ID de posición ...` | Live |
+| Error / devolucion | Solicitante o candidato | `Devolución: ...` | Live |
+| Paquete 1 | Candidato | `¡Te damos la bienvenida a Cemex! Paquete 1 - Summer Internship Program` | Live |
+| Documentos recibidos | Candidato | `Documentos recibidos - Summer Internship Program` | Live |
+| Convenio / NDA | Candidato | `¡Te damos la bienvenida a Cemex! Documentos - Summer Internship Program` | Live |
+| NDA firmado recibido | RH | `NDA firmado recibido` | Live, incluye PDF adjunto |
+| Finalizacion | Practicante | `Gracias - Summer Internship Program` | Live |
+| Gestionar convenio Coparmex | RH | `FAVOR DE GESTIONAR CONVENIO - {nombre}` | Live, RH revisa y reenvia |
+| Alta exitosa | RH | `Practicante dado de alta exitosamente` | Live |
+| Datos faltantes para gestion Coparmex | RH | `Practicante procesado - faltan datos para Coparmex (...)` | Live, caso raro si matching no resolvio |
+| Campos organizacionales no resueltos | RH | `Campos organizacionales por completar - {archivo}` | Live, incluye Excel adjunto |
+| Baja | RH | `Baja De Practicante - {nombre}` | Live, best-effort |
+
+### 9.4 Attachments
+
+ACS soporta attachments via `email_service._build_attachments`.
+
+Soportes:
+
+- Rutas de archivo local.
+- Tuplas `(name, bytes)`.
+
+Si un attachment no se puede leer, se omite y se registra nota en logs; no debe
+tumbar todo el envio.
+
+## 10. Bajas
+
+La baja se detecta durante la sincronizacion de la base actual de practicantes.
+
+Condicion:
 
 ```text
-HC activos: 281
-HC inactivos: 21
-Terminan 0-30 dias: 53
-Vencidos activos: 10
-Vacantes abiertas: 0
-Practicantes con docs faltantes: 0
-Excepciones abiertas: 63
+status anterior: activo / active / ST002
+status nuevo: baja / inactivo / inactive / ST003 / ST004
 ```
 
-Remaining open exceptions:
+Efectos:
+
+1. El practicante deja de contar como activo.
+2. Se crea evento en `fact_intern_lifecycle_events`.
+3. Se prepara comunicacion en `fact_communications`.
+4. Se intenta enviar correo real a RH por ACS si `EMAIL_SIMULATION_MODE=false`.
+
+Subject:
 
 ```text
-UPCOMING_EXPIRATION: 53
-EXPIRED_ACTIVE_END_DATE: 10
+Baja De Practicante - {nombre}
 ```
 
-These are legitimate contract-risk warnings, not stale data quality noise.
+El body incluye datos personales, academicos, CEMEX, organizacionales, sueldo,
+fecha de ingreso, fecha fin y estado.
 
-## 16. Power BI Configuration
+## 11. Validaciones
 
-Power BI is built in Power BI Service.
+### 11.1 Datos del candidato
 
-Recommended dataset mode:
+Validaciones principales:
+
+- Nombre requerido.
+- Email con formato valido.
+- CURP con formato de 18 caracteres.
+- Carrera requerida.
+- Fecha de nacimiento no futura.
+- Advertencia si carrera no coincide con requisicion.
+
+### 11.2 Documentos
+
+Validaciones principales:
+
+- Tipo de documento requerido.
+- Clasificacion por filename y contenido.
+- CURP de documento vs alta cuando esta disponible.
+- Texto leible o OCR por Document Intelligence.
+- Documentos requeridos completos.
+- NDA original de RH en DOCX.
+- NDA firmado del practicante en PDF.
+- Nombre de archivo firmado para NDA cuando aplica.
+
+### 11.3 Contratos
+
+Validaciones principales:
+
+- Activo con contrato vencido.
+- Activo con contrato por vencer en 30 dias.
+- Inactivo/baja que todavia aparezca en activos.
+
+## 12. Power BI
+
+Power BI debe conectarse a Azure SQL y consumir vistas, no tablas crudas.
+
+Modo recomendado:
 
 ```text
-Import mode with scheduled refresh
+Import mode + scheduled refresh
 ```
 
-Recommended refresh:
+Refresh recomendado:
 
-```text
-Every 30 minutes, hourly, or daily depending on HR operational need.
-```
+- Cada 30 minutos o 1 hora durante operacion.
+- Diario si el volumen es bajo.
 
-Recommended pages:
+Paginas recomendadas:
 
-1. Resumen Ejecutivo RH.
+1. Resumen Ejecutivo.
 2. Vacantes y Capacidad.
-3. Costos y Distribucion.
-4. Vencimientos, Inactivos y Riesgo.
-5. Documentos, Excepciones y Acciones RH.
+3. Costos.
+4. Contratos, Bajas e Inactivos.
+5. Documentos y Excepciones.
 
-Detailed setup:
+Detalle completo de visuales:
 
 ```text
 docs/power_bi_no_dax_5_pages.md
 docs/power_bi_dashboard.md
 ```
 
-## 17. Alerts
+## 13. Configuracion local
 
-Alert recommendations are documented in:
-
-```text
-docs/email_alert_recommendations.md
-```
-
-Recommended first alerts:
-
-1. Pipeline Failed.
-2. File Moved To Failed.
-3. Bad Rows Detected.
-4. Missing Requisition ID.
-5. Baja De Practicante.
-6. Contract Expired But Still Active.
-7. Contract Ending In 30 Days.
-8. Power BI Refresh Failed.
-
-Do not enable every alert at once. Start with production-critical alerts, then add HR operational alerts after real-world testing.
-
-## 18. Email Intake
-
-Current status:
-
-- Gmail/dev intake exists.
-- Outlook/Microsoft Graph path is prepared but not the current primary flow.
-- Power Automate is no longer required as the main file intake mechanism.
-
-Script:
-
-```text
-scripts/intake_gmail_attachments.py
-```
-
-Later real-life test plan:
-
-1. Send current interns Excel.
-2. Send requisition file.
-3. Send candidate/onboarding packet.
-
-This is intentionally deferred until after more real-life validation.
-
-## 19. Security And Secrets
-
-Never commit:
+Archivo local:
 
 ```text
 .env
-local.settings.json
-real Azure connection strings
-real SQL passwords
-Document Intelligence key
-Graph client secret
-SMTP passwords
 ```
 
-Use Azure Function App settings for deployed secrets.
+Nunca commitear `.env`.
 
-Use managed identity for SQL from Azure Function:
+Variables minimas para pruebas locales con Azure:
 
 ```text
-AZURE_SQL_AUTH_MODE=managed_identity
+AZURE_STORAGE_CONNECTION_STRING=<secret>
+RAW_UPLOADS_CONTAINER=raw-uploads
+ERROR_REPORTS_CONTAINER=error-reports
+ARCHIVE_CONTAINER=archive
+AZURE_SQL_SERVER=<server>
+AZURE_SQL_DATABASE=<database>
+AZURE_SQL_AUTH_MODE=interactive|sql_password|managed_identity
+AZURE_SQL_CONNECTION_STRING=<secret cuando aplique>
+EMAIL_SIMULATION_MODE=true
+DEV_EMAIL_OVERRIDE=<correo de prueba>
+DOC_INTEL_ENDPOINT=<endpoint>
+DOC_INTEL_KEY=<secret>
 ```
 
-Local development can use:
+Compilar modulos:
 
-```text
-AZURE_SQL_AUTH_MODE=default
+```bash
+.venv/bin/python -m py_compile scripts/process_blob_file.py scripts/pipeline_service.py scripts/run_intake_pipeline.py scripts/flexible_file_classifier.py scripts/lifecycle_requirements.py scripts/matching_engine.py scripts/communication_packager.py scripts/check_function_readiness.py scripts/smoke_e2e_pipeline.py scripts/deployment_readiness_e2e.py scripts/onboarding_pipeline.py scripts/document_pipeline.py scripts/requisition_parser.py scripts/email_service.py
 ```
 
-or another configured development mode.
-
-## 20. Deployment Runbook
-
-### Pre-Deploy Checks
-
-From repo root:
+Readiness check:
 
 ```bash
 .venv/bin/python scripts/check_function_readiness.py
+```
+
+Smoke test offline:
+
+```bash
 .venv/bin/python scripts/smoke_e2e_pipeline.py
 ```
 
-Optional Azure SQL view check:
+Smoke con revision de vistas SQL:
 
 ```bash
 SMOKE_CHECK_SQL_VIEWS=1 .venv/bin/python scripts/smoke_e2e_pipeline.py
 ```
 
-### Sync Function Modules
+## 14. Despliegue
+
+El Function App es Flex Consumption. Usar zip deploy con build remoto:
 
 ```bash
-.venv/bin/python scripts/sync_function_modules.py
+cd azure_function_app
+zip -r /tmp/mex-intern-pipeline.zip . \
+  -x '*.pyc' '__pycache__/*' '*/__pycache__/*' '.DS_Store' \
+     'local.settings.json' '.env' '.venv/*'
+
+az functionapp deployment source config-zip \
+  -g rg-intern-pipeline-dev \
+  -n mex-intern-pipeline-func-win \
+  --src /tmp/mex-intern-pipeline.zip \
+  --build-remote true
 ```
 
-This copies updated modules from `scripts/` into `azure_function_app/scripts/`.
-
-### Deploy Function
-
-From `azure_function_app/`:
-
-```bash
-func azure functionapp publish mex-intern-pipeline-func-win --python
-```
-
-or deploy through VS Code Azure Functions extension.
-
-### Restart Function
+Reiniciar si aplica:
 
 ```bash
 az functionapp restart \
-  --resource-group rg-intern-system-dev \
-  --name mex-intern-pipeline-func-win
+  -g rg-intern-pipeline-dev \
+  -n mex-intern-pipeline-func-win
 ```
 
-## 21. SQL Maintenance Runbook
+Nota:
 
-### Apply SQL Script Locally To Azure SQL
+- Classic Kudu `/api/zipdeploy` no funciona correctamente para este Flex app.
+- Enviar source solamente; Azure Oryx instala dependencias en build remoto.
+- Deploys productivos requieren aprobacion explicita de Bryan.
 
-Use the existing Python/Azure SQL connection utilities. Scripts are separated by `GO`, so apply in batches.
+## 15. Monitoreo y troubleshooting
 
-Basic pattern:
+### 15.1 Function App
+
+Revisar estado:
 
 ```bash
-.venv/bin/python -c "import re, sys; sys.path.insert(0,'scripts'); import azure_clients; sql=open('scripts/sql/<script>.sql', encoding='utf-8').read(); batches=[b.strip() for b in re.split(r'(?im)^\\s*GO\\s*$', sql) if b.strip()]; conn=azure_clients.get_sql_connection(); cur=conn.cursor(); [cur.execute(batch) for batch in batches]; conn.commit(); conn.close(); print(len(batches))"
+az functionapp show \
+  -g rg-intern-pipeline-dev \
+  -n mex-intern-pipeline-func-win \
+  --query "{state:state, hostNames:enabledHostNames}"
 ```
 
-If Azure SQL firewall blocks local access, create a temporary rule, apply changes, then delete it immediately.
-
-### Temporary Firewall Rule
+Listar funciones:
 
 ```bash
-az sql server firewall-rule create \
-  --resource-group rg-intern-system-dev \
-  --server rg-intern-system-dev \
-  --name codex-temp-maintenance \
-  --start-ip-address <your-ip> \
-  --end-ip-address <your-ip>
+az functionapp function list \
+  -g rg-intern-pipeline-dev \
+  -n mex-intern-pipeline-func-win \
+  --query "[].name"
 ```
 
-Delete it after work:
+### 15.2 SQL
 
-```bash
-az sql server firewall-rule delete \
-  --resource-group rg-intern-system-dev \
-  --server rg-intern-system-dev \
-  --name codex-temp-maintenance
-```
-
-## 22. Verification Queries
-
-### Dashboard KPI Check
+Validar tablas:
 
 ```sql
-SELECT *
-FROM dbo.vw_powerbi_dashboard_kpis;
+SELECT COUNT(*) AS table_count
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = 'dbo'
+  AND TABLE_TYPE = 'BASE TABLE';
 ```
 
-### Remaining Exceptions
+Validar vistas Power BI:
 
 ```sql
-SELECT issue_field, issue_type, severity, COUNT(*) AS issue_count
-FROM dbo.vw_business_validation_exceptions
-GROUP BY issue_field, issue_type, severity
-ORDER BY issue_count DESC;
+SELECT TABLE_NAME
+FROM INFORMATION_SCHEMA.VIEWS
+WHERE TABLE_SCHEMA = 'dbo'
+  AND TABLE_NAME LIKE 'vw_powerbi_%'
+ORDER BY TABLE_NAME;
 ```
 
-### Org Completeness
+Validar runs recientes:
 
 ```sql
-SELECT
-    SUM(CASE WHEN vp IS NULL OR LTRIM(RTRIM(vp)) = '' THEN 1 ELSE 0 END) AS missing_vp,
-    SUM(CASE WHEN cia_hc IS NULL OR LTRIM(RTRIM(cia_hc)) = '' THEN 1 ELSE 0 END) AS missing_cia,
-    SUM(CASE WHEN cc_hc IS NULL OR LTRIM(RTRIM(cc_hc)) = '' THEN 1 ELSE 0 END) AS missing_cc,
-    SUM(CASE WHEN oi_hc IS NULL OR LTRIM(RTRIM(oi_hc)) = '' THEN 1 ELSE 0 END) AS missing_oi,
-    SUM(CASE WHEN manager IS NULL OR LTRIM(RTRIM(manager)) = '' THEN 1 ELSE 0 END) AS missing_manager
-FROM dbo.vw_powerbi_interns_status;
+SELECT TOP 50 *
+FROM dbo.fact_pipeline_runs
+ORDER BY started_at DESC;
 ```
 
-### Contract Risk
+### 15.3 Storage
 
-```sql
-SELECT risk_bucket, COUNT(*) AS intern_count
-FROM dbo.vw_powerbi_contract_risk
-GROUP BY risk_bucket
-ORDER BY risk_bucket;
-```
-
-### Active Paquete 1 Requirements
-
-```sql
-SELECT
-    pr.process_type_id,
-    rdt.document_code,
-    rdt.document_name,
-    pr.requirement_scope,
-    pr.is_required
-FROM dbo.fact_process_requirements pr
-JOIN dbo.dim_required_document_types rdt
-    ON pr.required_document_type_id = rdt.required_document_type_id
-WHERE pr.process_type_id IN ('PROC_NEW_HIRE', 'PROC_ALTA')
-  AND pr.requirement_scope = 'Applicant'
-  AND pr.is_required = 1
-ORDER BY pr.process_type_id, rdt.document_code;
-```
-
-## 23. Troubleshooting
-
-### Function Does Not Trigger
-
-Check:
-
-- Blob landed under `raw-uploads`.
-- Blob path does not start with ignored prefixes.
-- Function App is running.
-- `AzureWebJobsFeatureFlags=EnableWorkerIndexing` exists.
-- Storage connection string is valid.
-- Event Grid/blob trigger wiring is healthy.
-
-### File Fails Processing
-
-Check:
-
-- `fact_pipeline_runs` for failed run.
-- `fact_processed_blobs` for blob status.
-- `fact_validations` for row-level issues.
-- `error-reports` container/path.
-- Azure Function logs.
-
-### Power BI Shows Old Data
-
-Check:
-
-- Dataset refresh status in Power BI Service.
-- SQL views return current data.
-- Power BI connection points to correct Azure SQL database.
-- Import mode refresh schedule is enabled.
-
-### Missing Docs Looks Too High
-
-Check:
-
-- `vw_powerbi_dashboard_kpis.practicantes_con_docs_faltantes`.
-- `vw_powerbi_document_status` filtered by `is_missing = 1`.
-- Paquete 1 config in `fact_process_requirements`.
-- Make sure legacy missing document rows are resolved by `2026-06_package1_document_requirements.sql`.
-
-### Org Fields Missing
-
-Check:
-
-- `dim_manager_assignments`.
-- `vw_canonical_org_assignments`.
-- Current intern row has at least one strong signal: `JefeInmediato`, `OI HC`, `CC HC`, `VP HC`, `CIA HC`.
-
-### OCR Does Not Work
-
-Check:
-
-- Function App settings `DOC_INTEL_ENDPOINT` and `DOC_INTEL_KEY`.
-- Document Intelligence resource is active.
-- File extension is supported.
-- PDF/image is readable.
-- Azure Function has outbound network access.
-
-## 24. Known Deferred Work
-
-These are intentionally deferred until after real-life testing:
-
-- Three-email end-to-end test:
-  - DB update file.
-  - Requisition file.
-  - Candidate/onboarding packet.
-- Final production cutover.
-- Deleting legacy tables/views.
-- Enabling all email alerts.
-- Real recipient email sending.
-- Row-level security in Power BI, if HR requires VP-based data separation.
-
-## 25. Git Workflow
-
-Recommended branch naming:
-
-```text
-codex/<short-feature-name>
-```
-
-Before commit:
+Validar containers:
 
 ```bash
-.venv/bin/python scripts/smoke_e2e_pipeline.py
-SMOKE_CHECK_SQL_VIEWS=1 .venv/bin/python scripts/smoke_e2e_pipeline.py
-git status --short
-git diff --stat
+az storage container list \
+  --account-name rginternpipelinedevb961 \
+  --query "[].name"
 ```
 
-Commit message style:
+### 15.4 Email
 
-```text
-Implement intern pipeline automation and Power BI reporting
-```
-
-Do not commit `.env`, local settings with secrets, generated temp files, or real exported HR files unless explicitly approved.
-
-## 26. Operational Ownership
-
-Suggested owners:
-
-- HR data owner:
-  - Reviews Power BI dashboard and data issues.
-  - Decides alert thresholds.
-  - Confirms business labels and status meanings.
-- System owner:
-  - Maintains Azure Function, SQL scripts, secrets, and deployments.
-  - Reviews failed pipeline runs.
-  - Applies schema/config migrations.
-- Power BI owner:
-  - Maintains report layout, refresh, permissions.
-  - Coordinates workspace/app access.
-
-## 27. Quick Commands
-
-Run smoke test:
-
-```bash
-.venv/bin/python scripts/smoke_e2e_pipeline.py
-```
-
-Run smoke with SQL view check:
-
-```bash
-SMOKE_CHECK_SQL_VIEWS=1 .venv/bin/python scripts/smoke_e2e_pipeline.py
-```
-
-Check Function readiness:
-
-```bash
-.venv/bin/python scripts/check_function_readiness.py
-```
-
-Sync Function modules:
-
-```bash
-.venv/bin/python scripts/sync_function_modules.py
-```
-
-List Function App settings names only:
+Validar modo de envio sin imprimir secrets:
 
 ```bash
 az functionapp config appsettings list \
-  --resource-group rg-intern-system-dev \
-  --name mex-intern-pipeline-func-win \
-  --query "[].name" \
-  --output table
+  -g rg-intern-pipeline-dev \
+  -n mex-intern-pipeline-func-win \
+  --query "[?name=='EMAIL_SIMULATION_MODE' || name=='RH_RECIPIENT_EMAILS' || name=='ACS_SENDER_EMAIL'].{name:name,value:value}"
 ```
 
-Restart Function:
+Interpretacion:
 
-```bash
-az functionapp restart \
-  --resource-group rg-intern-system-dev \
-  --name mex-intern-pipeline-func-win
+- `EMAIL_SIMULATION_MODE=true`: no manda correos reales.
+- `EMAIL_SIMULATION_MODE=false`: manda correos reales.
+
+## 16. Seguridad
+
+Reglas:
+
+- Nunca commitear `.env`, connection strings, SQL passwords, ACS keys ni Document Intelligence keys.
+- Nunca imprimir secrets completos en terminal o en manuales.
+- Usar Function App settings para secretos en Azure.
+- Usar `.env` solo localmente.
+- Rotar cualquier secreto que haya sido expuesto.
+- Mantener `ROTATE_SECRETS.md` como registro de credenciales que Bryan debe rotar.
+- Confirmar con Bryan antes de deploy productivo, cambios live de schema o merges a `main`.
+
+## 17. Costos aproximados
+
+El costo depende del uso, pero para el volumen actual el estimado mensual es bajo.
+
+| Servicio | Cobro principal | Estimado mensual bajo uso |
+|---|---|---|
+| Azure SQL Basic | DB provisionada | aprox. 5 USD |
+| Azure Functions Flex | ejecuciones y memoria | 0 a 2 USD |
+| Blob Storage Hot LRS | GB almacenado y operaciones | menos de 1 USD con pocos MB |
+| Document Intelligence F0 | free tier | 0 USD mientras siga en F0 y dentro del limite |
+| ACS Email | emails enviados y MB transferidos | centavos para cientos/miles de emails |
+| Application Insights | ingesta de logs | 0 a 5 USD si el volumen es bajo |
+
+Estimado total actual:
+
+```text
+6 a 15 USD / mes aproximadamente
 ```
 
-Send a one-time report of active interns with expired contracts:
+## 18. Pendientes conocidos
 
-```bash
-.venv/bin/python scripts/send_expired_active_contracts_email.py
-```
+- Re-subir el roster W1 completo con las 302 filas y columnas reales `Importe` /
+  `ImporteTotal` para eliminar aproximaciones de costo.
+- Verificar dominio `cemex.com` en ACS con DNS corporativo.
+- Configurar CI/CD con OIDC para que GitHub Actions despliegue Flex correctamente.
+- Decidir si se quiere digest programado de contratos vencidos / activos para RH.
+- Decidir si `dim_open_positions` debe registrar runs formales tipo `PROC_POSITIONS_SYNC`.
+- Resolver fisicamente `fact_intern_missing_items` cuando matching completa campos,
+  si se quiere que SQL operativo cierre esos items y no solo las vistas los muestren
+  como `Resuelta automaticamente`.
 
-The command above is a dry run. To actually send through configured SMTP:
+## 19. Regla de oro operativa
 
-```bash
-.venv/bin/python scripts/send_expired_active_contracts_email.py --send
-```
+Si cambia el nombre de cualquier recurso, actualizar estos lugares:
 
-## 28. Final Current State
-
-As of this manual:
-
-- Power BI reporting views are created.
-- Power BI no-DAX views are created.
-- Document Intelligence settings are present on the real Function App.
-- Paquete 1 document configuration is aligned.
-- Legacy missing-document noise was resolved.
-- Current data has complete org fields.
-- Remaining exceptions are contract-risk warnings only.
-- Email real-life three-file testing is deferred.
-- Final cutover is deferred until after real-life testing.
+- Azure Function App settings.
+- Azure SQL permissions / connection.
+- Power BI connection.
+- `.env` local.
+- Documentacion en `docs/`.
+- Comandos de deploy.
+- `AGENT_HANDOFF.md`.

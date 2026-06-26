@@ -99,7 +99,7 @@ This is the recommended alert catalog. Do not enable all alerts at once; pick th
 - Recipients: HR onboarding owner.
 - Suggested frequency: daily summary.
 - Include: intern/candidate, missing document, VP, manager, file/source.
-- Current Paquete 1 required documents: `ALTA`, `CURP`, `CONSTANCIA_ESTUDIOS`, `IDENTIFICACION`, `COMPROBANTE_DOMICILIO`.
+- Current Paquete 1 required documents: `ALTA`, `CURP`, `CONSTANCIA_ESTUDIOS`, `IDENTIFICACION`, `COMPROBANTE_DOMICILIO`, `ACTA_NACIMIENTO`.
 
 ### Document Needs Review
 

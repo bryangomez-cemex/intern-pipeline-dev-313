@@ -216,11 +216,11 @@ ACS_SENDER_EMAIL=...
 ACS_SENDER_NAME=Intern Pipeline
 TEST_EMAIL_TO=...
 RH_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com,valeria.acunaam@cemex.com
-COPARMEX_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com
 ```
 
-`RH_RECIPIENT_EMAILS` are fixed internal recipients for HR notifications.
-`COPARMEX_RECIPIENT_EMAILS` currently uses a placeholder. Practicantes usually use
-CEMEX emails, while new hires may still use personal emails until their CEMEX account
-exists — `resolve_person_email()` picks the correct field by person/process type.
+`RH_RECIPIENT_EMAILS` are fixed internal recipients for HR notifications and
+Coparmex-ready packages. RH reviews those emails and forwards them to Coparmex.
+Practicantes usually use CEMEX emails, while new hires may still use personal
+emails until their CEMEX account exists — `resolve_person_email()` picks the
+correct field by person/process type.
 Test locally with `python scripts/test_acs_email.py`.

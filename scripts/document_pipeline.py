@@ -26,8 +26,8 @@ import onboarding_pipeline as ob
 
 load_dotenv()
 
-# Required candidate document set (Paquete 1). Acta de nacimiento is optional.
-REQUIRED_CANDIDATE_DOCS = ["alta", "curp", "constancia", "identificacion", "comprobante_domicilio"]
+# Required candidate document set (Paquete 1).
+REQUIRED_CANDIDATE_DOCS = ["alta", "curp", "constancia", "identificacion", "comprobante_domicilio", "acta"]
 
 # Filename keywords, most specific first.
 FILENAME_KEYWORDS = [
@@ -45,6 +45,7 @@ CONTENT_KEYWORDS = [
     ("convenio", ["convenio", "escuela-empresa", "practicas profesionales", "prácticas profesionales"]),
     ("constancia", ["clearinghouse", "enrollment", "constancia de estudios"]),
     ("comprobante_domicilio", ["comprobante de domicilio", "domicilio", "recibo", "codigo postal", "código postal"]),
+    ("acta", ["acta de nacimiento", "registro civil"]),
     ("curp", ["clave unica", "curp"]),
 ]
 
@@ -291,7 +292,7 @@ def check_candidate_documents_complete(intern_id, sender_email=None, notify_inco
             ob.send_email(cand_email or "candidate",
                           "Documentos recibidos – Summer Internship Program",
                           f"Hola, recibimos y validamos tu expediente completo ({', '.join(sorted(received))}). "
-                          "En breve te enviaremos tu convenio y Acuerdo de Confidencialidad para firma.")
+                          "En breve te enviaremos tu convenio para copia y el Acuerdo de Confidencialidad para firma.")
         return {"status": "complete", "intern_id": intern_id, "received": sorted(received)}
     finally:
         cur.close(); conn.close()
@@ -302,10 +303,16 @@ def check_candidate_documents_complete(intern_id, sender_email=None, notify_inco
 # ============================================================
 
 def process_convenio_doc(local_path, filename, meta=None):
-    """HR sends convenio / póliza / Acuerdo de Confidencialidad → store, link to the
-    candidate; once present, forward to the new hire (Welcome 2) with attachments."""
+    """HR sends convenio copy + NDA original. The convenio is only for the
+    candidate's records; the NDA must be delivered as DOCX and returned signed as PDF."""
     meta = meta or {}
     dtype, text = classify_document_type(local_path, filename)
+    ext = os.path.splitext(filename or local_path or "")[1].lower()
+    status = "received"
+    notes = None
+    if dtype == "nda" and ext != ".docx":
+        status = "problem"
+        notes = "NDA original debe cargarse en formato DOCX."
     conn = azure_clients.get_sql_connection()
     cur = conn.cursor()
     try:
@@ -313,18 +320,20 @@ def process_convenio_doc(local_path, filename, meta=None):
         doc_id = "DOC-" + str(uuid.uuid4())[:8]
         cur.execute(
             """INSERT INTO fact_intern_documents
-               (document_id, intern_id, stage, document_type, file_name, blob_path, status)
-               VALUES (?,?,?,?,?,?, 'received')""",
-            doc_id, intern_id, "convenio", dtype, filename, meta.get("source_blob") or local_path)
+               (document_id, intern_id, stage, document_type, file_name, blob_path, status, notes)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            doc_id, intern_id, "convenio", dtype, filename, meta.get("source_blob") or local_path, status, notes)
         conn.commit()
         print(f"  convenio doc: {filename} → type={dtype} intern={intern_id}")
-        return {"document_id": doc_id, "intern_id": intern_id, "document_type": dtype}
+        if notes:
+            ob._return_to_sender(meta.get("sender_email"), "NDA original", [notes])
+        return {"document_id": doc_id, "intern_id": intern_id, "document_type": dtype, "status": status, "notes": notes}
     finally:
         cur.close(); conn.close()
 
 
 def forward_convenio_to_candidate(intern_id):
-    """Once HR's convenio + NDA are in, forward them to the new hire (Welcome 2)."""
+    """Once HR's convenio copy + NDA DOCX are in, forward them to the new hire."""
     conn = azure_clients.get_sql_connection()
     cur = conn.cursor()
     try:
@@ -336,7 +345,7 @@ def forward_convenio_to_candidate(intern_id):
             return {"status": "waiting_pack1_complete", "documents_status": docs_status}
         cur.execute(
             "SELECT document_type, file_name, blob_path FROM fact_intern_documents "
-            "WHERE intern_id=? AND stage='convenio'", intern_id)
+            "WHERE intern_id=? AND stage='convenio' AND status='received'", intern_id)
         docs = cur.fetchall()
         have = {d[0] for d in docs}
         if not ({"convenio", "nda"} <= have):
@@ -351,9 +360,9 @@ def forward_convenio_to_candidate(intern_id):
         try:
             ob.send_email(email or "candidate",
                           "¡Te damos la bienvenida a Cemex! Documentos – Summer Internship Program",
-                          f"Hola {name}, adjunto encontrarás el convenio de prácticas y la carta de Acuerdo de "
-                          "Confidencialidad. Por favor revísalos, fírmalos (digital o impreso/escaneado) y "
-                          "envíalos de regreso en PDF con el formato Nombre_Apellido_NombreDocumento.",
+                          f"Hola {name}, adjunto encontrarás tu convenio de prácticas para tu copia y el Acuerdo "
+                          "de Confidencialidad en Word. Por favor firma únicamente el Acuerdo de Confidencialidad "
+                          "y envíalo de regreso en PDF con el formato Nombre_Apellido_NDA.pdf.",
                           attachments=attachments)
         finally:
             for t in temps:
@@ -429,11 +438,18 @@ def process_document(local_path, filename, meta=None):
 
 
 def process_signed_doc(local_path, filename, meta=None):
-    """New hire returns the signed convenio / NDA. Validate naming + presence; when
-    both are back, mark the round complete and notify HR."""
+    """New hire returns the signed NDA. Convenio copies are accepted but do not
+    drive completion; the required signed return is the NDA as PDF."""
     meta = meta or {}
     dtype, text = classify_document_type(local_path, filename)
+    ext = os.path.splitext(filename or local_path or "")[1].lower()
     naming_ok = bool(re.match(r"^[A-Za-zÁÉÍÓÚñÑ]+[_ ][A-Za-zÁÉÍÓÚñÑ]+[_ ].+", filename))
+    format_ok = not (dtype == "nda" and ext != ".pdf")
+    notes = []
+    if not naming_ok:
+        notes.append("nombre de archivo no sigue Nombre_Apellido_Documento")
+    if not format_ok:
+        notes.append("NDA firmado debe regresar en PDF.")
     conn = azure_clients.get_sql_connection()
     cur = conn.cursor()
     try:
@@ -444,24 +460,36 @@ def process_signed_doc(local_path, filename, meta=None):
                (document_id, intern_id, stage, document_type, file_name, blob_path, status, notes)
                VALUES (?,?,?,?,?,?,?,?)""",
             doc_id, intern_id, "signed", dtype, filename, meta.get("source_blob"),
-            "received", None if naming_ok else "nombre de archivo no sigue Nombre_Apellido_Documento")
+            "received" if format_ok else "problem",
+            "; ".join(notes) if notes else None)
         conn.commit()
-        # check completeness of the signed set
-        cur.execute("SELECT document_type FROM fact_intern_documents WHERE intern_id=? AND stage='signed'", intern_id)
+        if dtype != "nda":
+            return {"document_id": doc_id, "intern_id": intern_id, "status": "received_optional",
+                    "naming_ok": naming_ok, "format_ok": format_ok}
+        if not format_ok:
+            ob._return_to_sender(meta.get("sender_email"), "NDA firmado", notes)
+            return {"document_id": doc_id, "intern_id": intern_id, "status": "problem",
+                    "naming_ok": naming_ok, "format_ok": format_ok, "notes": notes}
+        # check completeness of the required signed set: NDA PDF only
+        cur.execute(
+            "SELECT document_type FROM fact_intern_documents "
+            "WHERE intern_id=? AND stage='signed' AND status='received'", intern_id)
         have = {r[0] for r in cur.fetchall()}
-        if {"convenio", "nda"} <= have:
+        if "nda" in have:
             cur.execute("UPDATE dim_interns SET convenio_status='signed_complete' WHERE intern_id=?", intern_id)
             conn.commit()
             cur.execute("SELECT nombre_completo FROM dim_interns WHERE intern_id=?", intern_id)
             nm = cur.fetchone()
             ob.send_email((ob._resolve_recipients(cur)).get("HR") or "hr",
-                          "Convenio firmado recibido",
-                          f"El practicante {nm[0] if nm else intern_id} devolvió el convenio y el Acuerdo de "
-                          f"Confidencialidad firmados. Proceso de documentos completo.")
+                          "NDA firmado recibido",
+                          f"El practicante {nm[0] if nm else intern_id} devolvió el Acuerdo de Confidencialidad "
+                          f"firmado en PDF. Se adjunta para RH. Proceso de documentos completo.",
+                          attachments=[local_path] if local_path else None)
             # step 12: everything complete → Coparmex package + final emails (HR, new hire, Coparmex)
             final = ob.finalize_onboarding(intern_id)
             return {"document_id": doc_id, "intern_id": intern_id, "status": "signed_complete",
-                    "naming_ok": naming_ok, "finalize": final.get("status")}
-        return {"document_id": doc_id, "intern_id": intern_id, "status": "received", "naming_ok": naming_ok}
+                    "naming_ok": naming_ok, "format_ok": format_ok, "finalize": final.get("status")}
+        return {"document_id": doc_id, "intern_id": intern_id, "status": "received", "naming_ok": naming_ok,
+                "format_ok": format_ok}
     finally:
         cur.close(); conn.close()

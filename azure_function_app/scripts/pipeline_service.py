@@ -948,17 +948,19 @@ def insert_communication(
 
 def resolve_group_recipients(cursor, recipient_group, fallback):
     """
-    Resolve recipient email(s) for a fixed group (HR, Coparmex, ...).
+    Resolve recipient email(s) for a fixed group.
 
-    Single source of truth is the env lists (RH_RECIPIENT_EMAILS /
-    COPARMEX_RECIPIENT_EMAILS), unified with the onboarding pipeline so both email
-    paths use the same recipients. The dim_email_recipients table is the next
-    fallback, and `fallback` is the last resort so the pipeline keeps working safely.
+    Single source of truth for live notifications is RH_RECIPIENT_EMAILS. Coparmex
+    packages are sent to RH only; RH reviews and forwards externally. The
+    dim_email_recipients table is the next fallback, and `fallback` is the last
+    resort so the pipeline keeps working safely.
     """
+    if recipient_group == "Coparmex":
+        recipient_group = "HR"
+
     # 1. Env lists (unified with onboarding_pipeline).
     env_value = {
         "HR": os.getenv("RH_RECIPIENT_EMAILS", ""),
-        "Coparmex": os.getenv("COPARMEX_RECIPIENT_EMAILS", ""),
     }.get(recipient_group, "")
     env_list = [e.strip() for e in (env_value or "").replace(";", ",").split(",") if e.strip()]
     if env_list:
@@ -1101,11 +1103,11 @@ def prepare_coparmex_package_communication(
     source_file_id,
     source_file_name
 ):
-    subject = f"Paquete Coparmex listo: {source_file_name}"
+    subject = f"Gestion Coparmex lista para RH: {source_file_name}"
 
     body = (
-        f"El paquete Coparmex para {source_file_name} esta listo.\n\n"
-        "RH: favor de revisar y reenviar a Coparmex la informacion correspondiente."
+        f"La gestion Coparmex para {source_file_name} esta lista.\n\n"
+        "RH: favor de revisar la informacion y reenviarla a Coparmex."
     )
 
     # Process change: Coparmex notifications now go to RH, who forward to Coparmex.
@@ -1574,6 +1576,107 @@ def create_error_report(error_rows, source_file_id):
         report_df.to_excel(writer, index=False, sheet_name="Validation Errors")
 
     return local_path, report_file_name, len(report_df)
+
+
+ORG_FIELD_COLUMNS = ["vp_hc", "cc_hc", "oi_hc", "cia_hc", "jefe_inmediato"]
+
+
+def create_unresolved_org_fields_report(cursor, intern_ids, source_file_id, source_file_name=None):
+    """Build an Excel file for RH when matching cannot resolve org fields."""
+    ids = sorted({str(i).strip() for i in (intern_ids or []) if i})
+    if not ids:
+        return None, None, 0
+
+    placeholders = ",".join("?" for _ in ids)
+    cursor.execute(
+        f"""
+        SELECT
+            intern_id,
+            nombre_completo,
+            num_empleado,
+            num_empleado_cemex,
+            email_personal,
+            correo_institucional,
+            jefe_inmediato,
+            vp_hc,
+            cc_hc,
+            oi_hc,
+            cia_hc,
+            area,
+            ubicacion_hc,
+            estado_ubicacion_hc,
+            puesto,
+            requisition_id
+        FROM dbo.dim_interns
+        WHERE intern_id IN ({placeholders})
+          AND (
+              NULLIF(LTRIM(RTRIM(COALESCE(vp_hc, ''))), '') IS NULL
+              OR NULLIF(LTRIM(RTRIM(COALESCE(cc_hc, ''))), '') IS NULL
+              OR NULLIF(LTRIM(RTRIM(COALESCE(oi_hc, ''))), '') IS NULL
+              OR NULLIF(LTRIM(RTRIM(COALESCE(cia_hc, ''))), '') IS NULL
+              OR NULLIF(LTRIM(RTRIM(COALESCE(jefe_inmediato, ''))), '') IS NULL
+          )
+        ORDER BY nombre_completo, intern_id
+        """,
+        *ids,
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return None, None, 0
+
+    columns = [d[0] for d in cursor.description]
+    report_rows = []
+    for row in rows:
+        item = dict(zip(columns, row))
+        missing = [field for field in ORG_FIELD_COLUMNS if not clean_value(item.get(field))]
+        item["campos_faltantes"] = ", ".join(missing)
+        item["source_file_name"] = source_file_name
+        item["accion_rh"] = "Completar campos faltantes y reenviar el archivo al sistema."
+        report_rows.append(item)
+
+    report_dir = os.path.join(LOCAL_WORK_DIR, "org_field_reports")
+    os.makedirs(report_dir, exist_ok=True)
+    report_file_name = f"org_fields_unresolved_{source_file_id}_{utc_timestamp()}.xlsx"
+    local_path = os.path.join(report_dir, report_file_name)
+
+    with pd.ExcelWriter(local_path, engine="openpyxl") as writer:
+        pd.DataFrame(report_rows).to_excel(writer, index=False, sheet_name="Campos Org Faltantes")
+
+    return local_path, report_file_name, len(report_rows)
+
+
+def send_unresolved_org_fields_report(cursor, intern_ids, source_file_id, source_file_name):
+    """Send an RH-only Excel report for org fields that matching could not fill."""
+    local_path, report_file_name, row_count = create_unresolved_org_fields_report(
+        cursor=cursor,
+        intern_ids=intern_ids,
+        source_file_id=source_file_id,
+        source_file_name=source_file_name,
+    )
+    if not local_path:
+        return None
+
+    try:
+        import onboarding_pipeline
+
+        recipient = resolve_group_recipients(cursor, "HR", "dev.hr@example.com")
+        subject = f"Campos organizacionales por completar - {source_file_name}"
+        body = (
+            f"El sistema proceso {source_file_name}, pero encontro {row_count} practicante(s) "
+            "con campos organizacionales que no pudo completar automaticamente con matching.\n\n"
+            "Se adjunta un Excel con la informacion suficiente para completar VP HC, CC HC, "
+            "OI HC, CIA HC y/o JefeInmediato manualmente.\n\n"
+            "Cuando RH complete el archivo/base fuente, favor de reenviarlo al sistema para que "
+            "se actualice automaticamente."
+        )
+        sent = False
+        for to in [e.strip() for e in recipient.replace(";", ",").split(",") if e.strip()]:
+            res = onboarding_pipeline.send_email(to, subject, body, attachments=[local_path])
+            sent = sent or res.get("status") in ("sent", "simulated")
+        return {"file_name": report_file_name, "row_count": row_count, "sent": sent}
+    except Exception as exc:
+        print(f"unresolved org fields report send note: {exc}")
+        return {"file_name": report_file_name, "row_count": row_count, "sent": False, "error": str(exc)}
 
 
 def log_error_report_file(cursor, report_file_id, report_file_name, report_blob_path, report_size_bytes):
@@ -3468,7 +3571,21 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                         )
                     )
 
-        # Generate error report if errors exist
+        org_report_result = send_unresolved_org_fields_report(
+            cursor=cursor,
+            intern_ids=processed_intern_ids,
+            source_file_id=file_id,
+            source_file_name=file_name,
+        )
+        if org_report_result:
+            print(f"Unresolved org fields report: {org_report_result}")
+
+        blocking_error_rows = [
+            error_row for error_row in error_rows
+            if error_row.get("severity", "Error") == "Error"
+        ]
+
+        # Generate error report if errors/warnings exist
         if error_rows:
             report_local_path, report_file_name, report_row_count = create_error_report(
                 error_rows=error_rows,
@@ -3506,14 +3623,14 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
             print(f"Error report uploaded to container: {ERROR_REPORTS_CONTAINER}")
 
         # MVP 4: prepare communication records
-        if error_rows:
+        if blocking_error_rows:
             communication_id = prepare_correction_communication(
                 cursor=cursor,
                 source_file_id=file_id,
                 source_file_name=file_name,
                 error_report_file_id=report_file_id,
                 error_report_name=report_file_name,
-                error_count=len(error_rows)
+                error_count=len(blocking_error_rows)
             )
 
             print(f"Correction communication prepared: {communication_id}")
@@ -3524,7 +3641,7 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                     intern_id=None,
                     process_type_id=classification["process_type_id"],
                     missing_items=[],
-                    validation_errors=error_rows,
+                    validation_errors=blocking_error_rows,
                     source_file_name=file_name,
                     error_report_file_id=report_file_id,
                 )
@@ -3582,10 +3699,6 @@ def _process_blob(source_container_name=None, source_blob_name=None, run_type="m
                 print("Communication package metadata could not be prepared:")
                 print(package_error)
 
-        blocking_error_rows = [
-            error_row for error_row in error_rows
-            if error_row.get("severity", "Error") == "Error"
-        ]
         validation_passed = bad_rows == 0 and missing_error_count == 0 and len(blocking_error_rows) == 0
         validation_result = "Validation Passed" if validation_passed else "Validation Failed"
         processed_blob_status = "Processed" if validation_passed else "Validation Failed"

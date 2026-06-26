@@ -25,11 +25,10 @@ IMAP_USERNAME = os.getenv("IMAP_USERNAME")
 IMAP_PASSWORD = os.getenv("IMAP_PASSWORD")
 INTAKE_EMAIL_FOLDER = os.getenv("INTAKE_EMAIL_FOLDER", "INBOX")
 
-# SAFETY: only process emails whose subject contains this tag. This keeps the
-# intake from sweeping an entire personal inbox — it only picks up messages the
-# sender deliberately marked for the pipeline. Set to empty to disable (NOT
-# recommended on a shared/personal inbox).
-INTAKE_SUBJECT_TAG = os.getenv("INTAKE_SUBJECT_TAG", "[INTERN]").strip()
+# Optional subject filter. Production should normally leave this empty because
+# subjects vary by process; classification uses attachments, email metadata, body
+# fields, and requisition IDs instead of a fixed subject tag.
+INTAKE_SUBJECT_TAG = os.getenv("INTAKE_SUBJECT_TAG", "").strip()
 # Hard cap on emails handled per run, as a backstop against a bad search.
 MAX_EMAILS_PER_RUN = int(os.getenv("INTAKE_MAX_EMAILS_PER_RUN", "25"))
 
@@ -203,8 +202,8 @@ def intake_gmail_attachments():
     try:
         mail.select(INTAKE_EMAIL_FOLDER)
 
-        # Only unread messages, and (by default) only those whose subject carries
-        # the pipeline tag — so a busy personal inbox is never swept wholesale.
+        # Only unread messages. If INTAKE_SUBJECT_TAG is explicitly configured,
+        # narrow to that tag; otherwise use attachments + metadata/body parsing.
         if INTAKE_SUBJECT_TAG:
             status, data = mail.search(None, "UNSEEN", "SUBJECT", f'"{INTAKE_SUBJECT_TAG}"')
             scope = f'unread emails with subject containing "{INTAKE_SUBJECT_TAG}"'

@@ -27,10 +27,10 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 **Email behavior (live)**
 - `email_service.py` (ACS) is the single sender; gated by `EMAIL_SIMULATION_MODE`.
   On the live app it is **`false` (real sends ON)**. Attachments are supported.
-- Recipients: `RH_RECIPIENT_EMAILS` / `COPARMEX_RECIPIENT_EMAILS` env vars are the
-  single source of truth (both `pipeline_service.resolve_group_recipients` and
-  onboarding use them). Currently both = `bryan.gomez@ext.cemex.com` (testing).
-- Coparmex emails now go to **RH** (they forward to Coparmex).
+- Recipients: `RH_RECIPIENT_EMAILS` is the single source of truth for RH and
+  Coparmex-ready emails. Currently = `bryan.gomez@ext.cemex.com` (testing).
+- Coparmex-ready emails go to **RH only**; RH reviews quickly and forwards to
+  Coparmex manually.
 - Baja + the four prepared comms (Correction / HR package / Coparmex / File processed)
   now send live (best-effort, marked Sent).
 
@@ -84,6 +84,66 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 ## Session log (newest first)
 
 ### 2026-06-26 — Codex
+- Updated routing and fallback behavior per Bryan's RH process notes; no deploy performed.
+- Coparmex-ready emails now route to RH only via `RH_RECIPIENT_EMAILS`; RH reviews
+  quickly and forwards to Coparmex manually. Removed active use of
+  `COPARMEX_RECIPIENT_EMAILS` from onboarding/pipeline routing.
+- Changed onboarding/finalization copy so success says Coparmex management is
+  prepared for RH review/forward, not sent directly to Coparmex.
+- Changed Gmail intake default so it does not require `[INTERN]` in the subject.
+  It processes unread emails with allowed attachments and uses metadata, body
+  fields, filenames/content, sender, and requisition IDs when present.
+- Added an RH-only Excel report for unresolved org fields after matching:
+  `Campos organizacionales por completar - {source_file}` with rows/columns for
+  VP HC, CC HC, OI HC, CIA HC, JefeInmediato, identifiers, location, position,
+  requisition and source file. The report is sent best-effort with an attachment.
+- Adjusted correction communication behavior so non-blocking warning rows do not
+  trigger the generic "Correccion requerida" email by themselves.
+- Updated README, technical manual, RH manual, behavior reference, workflow env,
+  and Function App copies via `scripts/sync_function_modules.py`.
+
+### 2026-06-26 — Codex
+- Updated convenio/NDA behavior in code and docs.
+- The convenio is now treated as copy-only for the candidate; it is no longer part
+  of the required signed return set.
+- The NDA original from HR must be DOCX; non-DOCX NDA originals are stored as
+  `problem`, return a correction email to the sender, and do not trigger the
+  candidate send.
+- The candidate only needs to return the signed NDA as PDF. A non-PDF signed NDA
+  is stored as `problem`, returns a correction email to the sender, and does not
+  complete the round.
+- When the signed NDA PDF is received, the system marks the round complete, sends
+  `NDA firmado recibido` to RH with the signed PDF attached, then finalizes
+  onboarding.
+- Updated `docs/system_behavior_reference.md`, `docs/technical_manual.md`, and
+  `docs/hr_manual.md` to match.
+
+### 2026-06-26 — Codex
+- Made `Acta de nacimiento` a required Paquete 1 document.
+- Updated hardcoded package validation in `scripts/document_pipeline.py` and the
+  Function App copy, adding `acta` to `REQUIRED_CANDIDATE_DOCS` and content
+  keywords.
+- Updated `2026-06_package1_document_requirements.sql` in both SQL locations so
+  `RDT_ACTA_NACIMIENTO` is active/required for `PROC_NEW_HIRE` and `PROC_ALTA`,
+  and no longer gets resolved as a legacy optional missing item.
+- Updated RH/technical docs, behavior reference, and alert recommendations to say
+  Paquete 1 now requires 6 documents including acta.
+
+### 2026-06-26 — Codex
+- Updated documentation only; no deploy performed.
+- Replaced `docs/technical_manual.md` with a Spanish technical manual covering
+  architecture, stack, Azure resources, Function App behavior, SQL setup order,
+  Blob contract, email/ACS behavior, baja flow, matching rules, Power BI views,
+  operations, monitoring, security, costs, and known open items.
+- Added `docs/hr_manual.md`, a Spanish RH-facing operating manual covering file
+  types, onboarding, Paquete 1, convenio/NDA, bajas, contracts, missing documents,
+  org-field matching, Power BI usage, processing expectations, and escalation info.
+- Refreshed `docs/system_behavior_reference.md` so it reflects the current live
+  sender (`practicantes@...azurecomm.net`), prepared communications live-send
+  behavior, env-var recipient resolution, real salary source for Coparmex, wired
+  ACS attachments, and the current open decisions.
+
+### 2026-06-26 — Codex
 - Pushed the production-readiness follow-up fixes to GitHub `main`.
   - `main` moved from `60ce411` to `6bab18e` (`Merge production readiness follow-up fixes`).
   - The merge brought in `74c79ef` and `f71684c`.
@@ -97,7 +157,8 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
   - Indexed functions: `process_raw_upload`, `setup_database`, `setup_database_on_startup`.
   - Live email settings still show real sends on to Bryan for testing:
     `EMAIL_SIMULATION_MODE=false`, `RH_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com`,
-    `COPARMEX_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com`.
+    `COPARMEX_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com` (historical; current
+    code routes Coparmex-ready emails through `RH_RECIPIENT_EMAILS` only).
 - Left existing local changes untouched:
   - `docs/system_behavior_reference.md`
   - `NA FORMATO PARA ALTA DE PRACTICANTE COPARMEX.xlsx`

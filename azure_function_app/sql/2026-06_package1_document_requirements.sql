@@ -3,7 +3,8 @@ Paquete 1 document requirements.
 
 This migration aligns document configuration with the current HR onboarding
 package:
-  - Required: alta, CURP, constancia, identificacion, comprobante de domicilio.
+  - Required: alta, CURP, constancia, identificacion, comprobante de domicilio,
+    acta de nacimiento.
   - Not required: professional photo.
   - Emergency contact is captured as email/body text, not as a document.
 
@@ -19,7 +20,8 @@ USING (
         ('RDT_CURP', 'CURP', 'CURP', 'CURP document or equivalent candidate identity proof.', '.pdf,.png,.jpg,.jpeg', 0, 1, 1, 1),
         ('RDT_CONSTANCIA_ESTUDIOS', 'CONSTANCIA_ESTUDIOS', 'Constancia de estudios', 'Current enrollment or school proof document.', '.pdf,.png,.jpg,.jpeg,.docx', 0, 1, 1, 1),
         ('RDT_IDENTIFICACION', 'IDENTIFICACION', 'Identificacion oficial', 'INE, passport, or equivalent official identification.', '.pdf,.png,.jpg,.jpeg', 0, 1, 1, 1),
-        ('RDT_COMPROBANTE_DOMICILIO', 'COMPROBANTE_DOMICILIO', 'Comprobante de domicilio', 'Recent proof of address such as CFE, water, phone, or similar utility receipt.', '.pdf,.png,.jpg,.jpeg', 0, 1, 1, 1)
+        ('RDT_COMPROBANTE_DOMICILIO', 'COMPROBANTE_DOMICILIO', 'Comprobante de domicilio', 'Recent proof of address such as CFE, water, phone, or similar utility receipt.', '.pdf,.png,.jpg,.jpeg', 0, 1, 1, 1),
+        ('RDT_ACTA_NACIMIENTO', 'ACTA_NACIMIENTO', 'Acta de nacimiento', 'Birth certificate for the candidate onboarding package.', '.pdf,.png,.jpg,.jpeg', 0, 1, 1, 1)
 ) AS source (
     required_document_type_id,
     document_code,
@@ -70,7 +72,6 @@ GO
 UPDATE dbo.dim_required_document_types
 SET
     required_for_applicant = CASE
-        WHEN document_code IN ('ACTA_NACIMIENTO') THEN 0
         WHEN document_code IN ('CV', 'NDA', 'ID_INE', 'SCHOOL_PROOF', 'OFFER_LETTER', 'CERTIFICADO') THEN 0
         ELSE required_for_applicant
     END,
@@ -91,8 +92,7 @@ WHERE process_type_id IN ('PROC_NEW_HIRE', 'PROC_ALTA')
       'RDT_ID_INE',
       'RDT_SCHOOL_PROOF',
       'RDT_OFFER_LETTER',
-      'RDT_CERTIFICADO',
-      'RDT_ACTA_NACIMIENTO'
+      'RDT_CERTIFICADO'
   );
 GO
 
@@ -104,11 +104,13 @@ USING (
         ('REQ-P1-CONSTANCIA', 'PROC_NEW_HIRE', 'RDT_CONSTANCIA_ESTUDIOS', 1, 'Applicant'),
         ('REQ-P1-IDENTIFICACION', 'PROC_NEW_HIRE', 'RDT_IDENTIFICACION', 1, 'Applicant'),
         ('REQ-P1-DOMICILIO', 'PROC_NEW_HIRE', 'RDT_COMPROBANTE_DOMICILIO', 1, 'Applicant'),
+        ('REQ-P1-ACTA', 'PROC_NEW_HIRE', 'RDT_ACTA_NACIMIENTO', 1, 'Applicant'),
         ('REQ-ALTA-P1-ALTA', 'PROC_ALTA', 'RDT_ALTA', 1, 'Applicant'),
         ('REQ-ALTA-P1-CURP', 'PROC_ALTA', 'RDT_CURP', 1, 'Applicant'),
         ('REQ-ALTA-P1-CONSTANCIA', 'PROC_ALTA', 'RDT_CONSTANCIA_ESTUDIOS', 1, 'Applicant'),
         ('REQ-ALTA-P1-IDENTIFICACION', 'PROC_ALTA', 'RDT_IDENTIFICACION', 1, 'Applicant'),
-        ('REQ-ALTA-P1-DOMICILIO', 'PROC_ALTA', 'RDT_COMPROBANTE_DOMICILIO', 1, 'Applicant')
+        ('REQ-ALTA-P1-DOMICILIO', 'PROC_ALTA', 'RDT_COMPROBANTE_DOMICILIO', 1, 'Applicant'),
+        ('REQ-ALTA-P1-ACTA', 'PROC_ALTA', 'RDT_ACTA_NACIMIENTO', 1, 'Applicant')
 ) AS source (
     requirement_id,
     process_type_id,
@@ -147,5 +149,5 @@ SET
     missing_description = CONCAT(missing_description, ' Legacy applicant requirement resolved by Paquete 1 migration.')
 WHERE status = 'Open'
   AND missing_type = 'Document'
-  AND missing_code IN ('CV', 'NDA', 'ID_INE', 'SCHOOL_PROOF', 'OFFER_LETTER', 'CERTIFICADO', 'ACTA_NACIMIENTO');
+  AND missing_code IN ('CV', 'NDA', 'ID_INE', 'SCHOOL_PROOF', 'OFFER_LETTER', 'CERTIFICADO');
 GO

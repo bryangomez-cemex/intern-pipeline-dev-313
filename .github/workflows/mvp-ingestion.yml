@@ -37,7 +37,7 @@ jobs:
       IMAP_USERNAME: ${{ secrets.IMAP_USERNAME }}
       IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
       INTAKE_EMAIL_FOLDER: INBOX
-      INTAKE_SUBJECT_TAG: "[INTERN]"
+      INTAKE_SUBJECT_TAG: ""
 
     steps:
       - name: Checkout repo

@@ -31,11 +31,10 @@ load_dotenv()
 
 import email_service
 
-# Fixed RH recipients for HR notifications. COPARMEX currently uses a placeholder.
-# Practicantes usually have CEMEX emails; new hires may still use personal emails
-# until their CEMEX account exists.
+# Fixed RH recipients for HR notifications. Coparmex packages are sent to RH only;
+# RH reviews quickly and forwards externally. Practicantes usually have CEMEX
+# emails; new hires may still use personal emails until their CEMEX account exists.
 RH_RECIPIENT_EMAILS = os.getenv("RH_RECIPIENT_EMAILS", "")
-COPARMEX_RECIPIENT_EMAILS = os.getenv("COPARMEX_RECIPIENT_EMAILS", "")
 
 
 def _parse_emails(value):
@@ -366,8 +365,9 @@ def process_requisicion(local_path, meta=None):
                        f"Requisición recibida – ID de posición {req_id}",
                        f"Tu requisición para '{fields.get('puesto') or ''}' fue procesada correctamente.\n\n"
                        f"El ID de posición es: {req_id}\n\n"
-                       "Inclúyelo en la lista de new hires (columna 'NUMERO DE PUESTO') o en el asunto del "
-                       "correo (p.ej. [INTERN][" + req_id + "]) para vincular al practicante con esta posición.")
+                       "Inclúyelo en la lista de new hires (columna 'NUMERO DE PUESTO') o en el cuerpo del "
+                       "correo para vincular al practicante con esta posición. El sistema usa metadatos del "
+                       "correo y contenido de archivos, no depende de un subject fijo.")
         result = {"type": "requisicion", "status": "needs_review" if fields.get("needs_review") else "created",
                   "requisition_id": req_id, "puesto": fields.get("puesto")}
         print(f"REQUISICIÓN → {req_id} ({result['status']}) puesto={fields.get('puesto')}")
@@ -682,7 +682,8 @@ def send_pack1(cur, intern_id):
                "Contacto de emergencia (nombre, parentesco y teléfono):\n\n"
                "Y ADJUNTA estos documentos: Acta de nacimiento, Constancia de estudios, "
                "Identificación oficial, CURP, Comprobante de domicilio y el formato de alta adjunto "
-               "(lleno).\n\nIncluye [INTERN] en el asunto del correo.",
+               "(lleno).\n\nPuedes responder con el subject que ya tenga tu correo; el sistema usa el "
+               "contenido y los metadatos del mensaje para clasificarlo.",
                attachments=[tmpl] if tmpl else None)
     cur.execute("UPDATE dim_interns SET documents_status = COALESCE(documents_status, 'pack1_requested') WHERE intern_id=?", intern_id)
     if is_temp and tmpl:
@@ -822,21 +823,19 @@ COPARMEX_REQUIRED_FROM_HR = [
 
 
 def _resolve_recipients(cursor):
-    """RH/Coparmex notification recipients. Prefer the env lists
-    (RH_RECIPIENT_EMAILS / COPARMEX_RECIPIENT_EMAILS); fall back to the
-    dim_email_recipients table if an env list is not configured."""
-    out = {"HR": _parse_emails(RH_RECIPIENT_EMAILS), "Coparmex": _parse_emails(COPARMEX_RECIPIENT_EMAILS)}
-    # Only consult the optional dim_email_recipients table when the env lists don't
-    # already cover both groups (the table may not exist on simplified schemas).
-    if not (out["HR"] and out["Coparmex"]):
+    """RH notification recipients. Coparmex workflow is sent to RH only; RH
+    forwards externally after a quick check. Fall back to dim_email_recipients if
+    the RH env list is not configured."""
+    out = {"HR": _parse_emails(RH_RECIPIENT_EMAILS), "Coparmex": []}
+    if not out["HR"]:
         try:
             cursor.execute(
                 "SELECT recipient_group, email FROM dim_email_recipients "
-                "WHERE active_flag = 1 AND recipient_group IN ('HR','Coparmex')"
+                "WHERE active_flag = 1 AND recipient_group = 'HR'"
             )
             for group, email in cursor.fetchall():
-                if email and not out.get(group):
-                    out[group] = (out.get(group) or []) + [email]
+                if email and group == "HR":
+                    out["HR"] = out["HR"] + [email]
         except Exception as e:
             print("recipient resolve note:", e)
     # Collapse to a ';'-joined string (or None) for the existing call sites.
@@ -886,8 +885,9 @@ def _format_coparmex_email(fields):
 
 
 def finalize_onboarding(intern_id, hr_data=None):
-    """Stage F: after the candidate (and HR new-hires list) are in, either send the
-    Coparmex package or — if HR-sourced fields are still missing — notify RH instead."""
+    """Stage F: after the candidate and HR data are in, prepare the Coparmex
+    package for RH to review/forward. If the system cannot resolve required fields,
+    notify RH with the specific missing data instead."""
     conn = azure_clients.get_sql_connection()
     cur = conn.cursor()
     try:
@@ -947,32 +947,32 @@ def finalize_onboarding(intern_id, hr_data=None):
                    "Nos pondremos en contacto contigo muy pronto con los siguientes pasos.")
 
         if missing:
-            # Data incomplete → do NOT send Coparmex; ask RH to complete it.
+            # Data incomplete after matching → ask RH only in this rare unresolved case.
             send_email(recipients["HR"] or "hr",
                        f"Practicante procesado – faltan datos para Coparmex ({candidate.get('nombre_completo')})",
                        f"El expediente de {candidate.get('nombre_completo')} se procesó correctamente, pero la "
                        f"base de datos no pudo encontrar/hacer match de: {', '.join(missing)}.\n\n"
-                       f"Por ello NO se envió el correo a Coparmex. Por favor envíen estos datos a la base de "
-                       f"datos (incluyendo el número de puesto {req_id or '(sin posición)'} para hacer match). "
-                       f"Una vez completos, se enviarán los datos a Coparmex.\n\n"
+                       f"Por ello NO se preparó el correo de gestión Coparmex para RH. Por favor completen estos "
+                       f"datos en la base/archivo fuente (incluyendo el número de puesto {req_id or '(sin posición)'} "
+                       f"cuando aplique) y reenvíenlo al sistema. Esto debería ser un caso raro porque el matching "
+                       f"intenta resolverlos automáticamente.\n\n"
                        f"Datos disponibles en {POWERBI_LINK_TOKEN}")
             result = {"status": "rh_notified_missing", "intern_id": intern_id,
-                      "requisition_id": req_id, "missing": missing, "coparmex_sent": False}
+                      "requisition_id": req_id, "missing": missing, "coparmex_ready_for_rh": False}
         else:
-            # Complete → send Coparmex (attach the alta) + notify RH of success.
-            # Coparmex notifications now go to RH, who forward to Coparmex.
-            send_email(recipients["HR"] or recipients["Coparmex"] or "hr",
+            # Complete → send the Coparmex-ready email to RH only. RH reviews and forwards.
+            send_email(recipients["HR"] or "hr",
                        f"FAVOR DE GESTIONAR CONVENIO (RH reenviar a Coparmex) - {candidate.get('nombre_completo')}",
                        _format_coparmex_email(fields) +
-                       "\n\nRH: favor de reenviar esta informacion a Coparmex." +
+                       "\n\nRH: favor de revisar esta informacion y reenviarla a Coparmex." +
                        "\n\n(Se adjunta NA FORMATO PARA ALTA DE PRACTICANTE COPARMEX.xlsx)")
             send_email(recipients["HR"] or "hr",
                        "Practicante dado de alta exitosamente",
                        f"El practicante {candidate.get('nombre_completo')} (posición {req_id}) fue dado de alta "
-                       f"exitosamente y el paquete fue enviado a Coparmex.\n\n"
+                       f"exitosamente y la gestión Coparmex quedó preparada para revisión/reenvío por RH.\n\n"
                        f"Para acceder a los datos, visita {POWERBI_LINK_TOKEN}")
-            result = {"status": "coparmex_sent", "intern_id": intern_id,
-                      "requisition_id": req_id, "coparmex_sent": True}
+            result = {"status": "coparmex_ready_for_rh", "intern_id": intern_id,
+                      "requisition_id": req_id, "coparmex_ready_for_rh": True}
 
         conn.commit()
         print(f"FINALIZE {intern_id}: {result['status']}" + (f" missing={missing}" if missing else ""))
