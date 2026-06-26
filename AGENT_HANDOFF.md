@@ -83,6 +83,25 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 
 ## Session log (newest first)
 
+### 2026-06-26 — Codex
+- Pushed the production-readiness follow-up fixes to GitHub `main`.
+  - `main` moved from `60ce411` to `6bab18e` (`Merge production readiness follow-up fixes`).
+  - The merge brought in `74c79ef` and `f71684c`.
+- Published the merged `main` source package to the live Azure Function App
+  `mex-intern-pipeline-func-win` using Flex remote build.
+  - Package source commit: `6bab18e`.
+  - Azure deployment id: `71a21d2b-a7b3-4e8d-a840-50954d7706b6`.
+  - Azure result: `Deployment was successful.`
+- Verified after publish:
+  - Function App state: `Running`.
+  - Indexed functions: `process_raw_upload`, `setup_database`, `setup_database_on_startup`.
+  - Live email settings still show real sends on to Bryan for testing:
+    `EMAIL_SIMULATION_MODE=false`, `RH_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com`,
+    `COPARMEX_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com`.
+- Left existing local changes untouched:
+  - `docs/system_behavior_reference.md`
+  - `NA FORMATO PARA ALTA DE PRACTICANTE COPARMEX.xlsx`
+
 ### 2026-06-26 — Claude (Opus 4.8)
 Big batch of changes (all committed; SQL views applied live; code deployed):
 - **Power BI** (`2026-06_powerbi_refinements.sql`, applied live): `capacity_status` is a
