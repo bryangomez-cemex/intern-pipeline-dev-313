@@ -1203,6 +1203,26 @@ def fetch_baja_context(cursor, intern_id, fallback_status=None):
     return context
 
 
+def _send_baja_email_now(cursor, subject, body):
+    """Send the baja notification to HR via live ACS (respects EMAIL_SIMULATION_MODE
+    like every other email). Best-effort: a send failure never breaks row
+    processing. Returns True when at least one recipient was sent/simulated."""
+    try:
+        import onboarding_pipeline
+        recipients = onboarding_pipeline._parse_emails(onboarding_pipeline.RH_RECIPIENT_EMAILS)
+        if not recipients:
+            joined = resolve_group_recipients(cursor, "HR", os.getenv("DEV_EMAIL_OVERRIDE") or "")
+            recipients = [e.strip() for e in (joined or "").replace(";", ",").split(",") if e.strip()]
+        ok = False
+        for to in recipients:
+            res = onboarding_pipeline.send_email(to, subject, body)
+            ok = ok or res.get("status") in ("sent", "simulated")
+        return ok
+    except Exception as exc:
+        print(f"baja email send note: {exc}")
+        return False
+
+
 def prepare_baja_communication(
     cursor,
     intern_id,
@@ -1214,7 +1234,7 @@ def prepare_baja_communication(
     subject = build_baja_email_subject(context)
     body = build_baja_email_body(context)
 
-    return insert_communication(
+    communication_id = insert_communication(
         cursor=cursor,
         intern_id=intern_id,
         requisition_id=None,
@@ -1232,6 +1252,19 @@ def prepare_baja_communication(
         status="Prepared",
         error_message=f"Auto-prepared from status transition {old_status} -> {new_status}.",
     )
+
+    # Live notification to HR (in addition to the prepared audit record).
+    if _send_baja_email_now(cursor, subject, body):
+        try:
+            cursor.execute(
+                "UPDATE fact_communications SET status='Sent', communication_status='Sent' "
+                "WHERE communication_id=?",
+                communication_id,
+            )
+        except Exception:
+            pass
+
+    return communication_id
 
 
 # ============================================================
