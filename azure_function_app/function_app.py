@@ -83,6 +83,8 @@ SQL_SETUP_ORDER = [
     "2026-06_onboarding_schema.sql",
     "2026-06_schema_simplification.sql",
     "2026-06_powerbi_no_dax_views.sql",
+    "2026-06_powerbi_refinements.sql",
+    "2026-06_open_positions.sql",
 ]
 
 

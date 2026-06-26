@@ -87,8 +87,9 @@ USING (VALUES
     ('alias_intern_regionrh', 'region_rh', 'RegionRH', 'regionrh', 'intern_template'),
     ('alias_intern_oi_hc', 'oi_hc', 'OI HC', 'oi hc', 'intern_template'),
     ('alias_intern_frecuenciapago', 'payment_frequency', 'FrecuenciaPago', 'frecuenciapago', 'intern_template'),
-    ('alias_intern_importe', 'salary', 'Importe', 'importe', 'intern_template'),
-    ('alias_intern_importetotal', 'salary', 'ImporteTotal', 'importetotal', 'intern_template'),
+    -- Salary maps only from SalarioMensual (the original monthly salary on the
+    -- spreadsheet). Importe / ImporteTotal are total company cost, NOT salary, so
+    -- they are intentionally not aliased to the salary field.
     ('alias_intern_estatus', 'status', 'Estatus', 'estatus', 'intern_template'),
     ('alias_intern_cia_hc', 'company', 'CIA HC', 'cia hc', 'intern_template')
 ) AS source (column_alias_id, canonical_field_id, alias_name, normalized_alias_name, source_profile)
