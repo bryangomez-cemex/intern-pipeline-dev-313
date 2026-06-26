@@ -15,6 +15,8 @@ IMPORTANT: these vars must also be set in the Azure Function App:
 """
 
 import os
+import base64
+import mimetypes
 
 try:
     from dotenv import load_dotenv  # optional, for local testing
@@ -23,6 +25,28 @@ except Exception:
     pass
 
 PROVIDER = "azure_communication_services"
+
+
+def _build_attachments(attachments):
+    """Normalize attachment inputs into ACS dicts. Accepts local file paths or
+    (name, bytes) tuples; returns [{name, contentType, contentInBase64}].
+    Unreadable items are skipped (logged), not fatal."""
+    built = []
+    for item in attachments or []:
+        try:
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                name, raw = item
+                data = bytes(raw) if isinstance(raw, (bytes, bytearray)) else open(raw, "rb").read()
+            else:
+                name = os.path.basename(str(item))
+                with open(item, "rb") as fh:
+                    data = fh.read()
+            ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            built.append({"name": name, "contentType": ctype,
+                          "contentInBase64": base64.b64encode(data).decode("ascii")})
+        except Exception as exc:
+            print(f"[EMAIL] attachment skipped ({item!r}): {exc}")
+    return built
 
 
 def _simulation_mode():
@@ -44,9 +68,11 @@ def send_email(to_email, subject, html_body, to_name=None, cc=None,
     if _simulation_mode():
         preview = " ".join(str(html_body).split())[:200]
         cc_str = (" cc=" + ",".join(cc)) if cc else ""
-        print(f"[EMAIL SIMULATED] provider={PROVIDER} to={to_email}{cc_str} subject={subject!r}")
+        att = _build_attachments(attachments)
+        att_str = (" attachments=" + ",".join(a["name"] for a in att)) if att else ""
+        print(f"[EMAIL SIMULATED] provider={PROVIDER} to={to_email}{cc_str}{att_str} subject={subject!r}")
         print(f"  html preview: {preview!r}")
-        return {"status": "simulated", "provider": PROVIDER}
+        return {"status": "simulated", "provider": PROVIDER, "attachments": len(att)}
 
     conn = os.getenv("ACS_CONNECTION_STRING")
     sender = os.getenv("ACS_SENDER_EMAIL")
@@ -65,9 +91,9 @@ def send_email(to_email, subject, html_body, to_name=None, cc=None,
         }
         if cc:
             message["recipients"]["cc"] = [{"address": a} for a in cc if a]
-        # TODO: ACS attachment support is not implemented yet. Attachments are
-        # accepted (and preserved upstream) but not yet sent via ACS — wire this
-        # using message["attachments"] with base64 content when needed.
+        built_attachments = _build_attachments(attachments)
+        if built_attachments:
+            message["attachments"] = built_attachments
         poller = client.begin_send(message)
         result = poller.result()
         message_id = None
@@ -75,6 +101,7 @@ def send_email(to_email, subject, html_body, to_name=None, cc=None,
             message_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
         except Exception:
             pass
-        return {"status": "sent", "provider": PROVIDER, "id": message_id}
+        return {"status": "sent", "provider": PROVIDER, "id": message_id,
+                "attachments": len(built_attachments)}
     except Exception as e:
         return {"status": "failed", "provider": PROVIDER, "error": str(e)}
