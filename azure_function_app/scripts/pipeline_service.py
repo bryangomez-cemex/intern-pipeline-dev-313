@@ -948,11 +948,23 @@ def insert_communication(
 
 def resolve_group_recipients(cursor, recipient_group, fallback):
     """
-    Resolve the active recipient email(s) for a fixed group (HR, Coparmex, ...)
-    from dim_email_recipients, joined by ';'. Falls back to the provided default
-    if the table has no active entry, so the pipeline keeps working safely until
-    the table is populated with real addresses.
+    Resolve recipient email(s) for a fixed group (HR, Coparmex, ...).
+
+    Single source of truth is the env lists (RH_RECIPIENT_EMAILS /
+    COPARMEX_RECIPIENT_EMAILS), unified with the onboarding pipeline so both email
+    paths use the same recipients. The dim_email_recipients table is the next
+    fallback, and `fallback` is the last resort so the pipeline keeps working safely.
     """
+    # 1. Env lists (unified with onboarding_pipeline).
+    env_value = {
+        "HR": os.getenv("RH_RECIPIENT_EMAILS", ""),
+        "Coparmex": os.getenv("COPARMEX_RECIPIENT_EMAILS", ""),
+    }.get(recipient_group, "")
+    env_list = [e.strip() for e in (env_value or "").replace(";", ",").split(",") if e.strip()]
+    if env_list:
+        return ";".join(env_list)
+
+    # 2. dim_email_recipients table (if present on this schema).
     try:
         cursor.execute(
             """
@@ -986,6 +998,34 @@ def resolve_applicant_recipient(intern_email=None):
     return os.getenv("DEV_EMAIL_OVERRIDE") or "dev.intern@example.com"
 
 
+def _send_communication_now(recipient_email, subject, body):
+    """Send a prepared communication live via ACS (respects EMAIL_SIMULATION_MODE).
+    recipient_email may be one address or a ','/';'-separated list. Placeholder
+    *.example.com addresses are skipped. Best-effort: failures are logged and never
+    break pipeline processing. Returns True if at least one address was sent/simulated."""
+    try:
+        import onboarding_pipeline
+        recipients = [e.strip() for e in (recipient_email or "").replace(";", ",").split(",")
+                      if e.strip() and "@" in e and not e.strip().lower().endswith("example.com")]
+        ok = False
+        for to in recipients:
+            res = onboarding_pipeline.send_email(to, subject, body)
+            ok = ok or res.get("status") in ("sent", "simulated")
+        return ok
+    except Exception as exc:
+        print(f"communication send note: {exc}")
+        return False
+
+
+def _mark_communication_sent(cursor, communication_id):
+    try:
+        cursor.execute(
+            "UPDATE fact_communications SET status='Sent', communication_status='Sent' "
+            "WHERE communication_id=?", communication_id)
+    except Exception:
+        pass
+
+
 def prepare_correction_communication(
     cursor,
     source_file_id,
@@ -994,16 +1034,16 @@ def prepare_correction_communication(
     error_report_name,
     error_count
 ):
-    subject = f"Correction needed: {source_file_name}"
+    subject = f"Correccion requerida: {source_file_name}"
 
     body = (
-        f"The uploaded file {source_file_name} has {error_count} validation errors.\n\n"
-        f"An error report was generated: {error_report_name}\n\n"
-        "Please review the report, correct the file, and upload the corrected version.\n\n"
-        "This is a prepared communication record. No real email has been sent yet."
+        f"El archivo {source_file_name} tiene {error_count} errores de validacion.\n\n"
+        f"Se genero un reporte de errores: {error_report_name}\n\n"
+        "Por favor revisa el reporte, corrige el archivo y vuelve a subir la version corregida."
     )
 
-    return insert_communication(
+    recipient = resolve_applicant_recipient()
+    communication_id = insert_communication(
         cursor=cursor,
         intern_id=None,
         requisition_id=None,
@@ -1011,12 +1051,15 @@ def prepare_correction_communication(
         email_template_id="ET005",
         communication_type="Correction Needed",
         recipient_group="Intern / Applicant",
-        recipient_email=resolve_applicant_recipient(),
+        recipient_email=recipient,
         subject=subject,
         body=body,
         status="Prepared",
         error_message=None
     )
+    if _send_communication_now(recipient, subject, body):
+        _mark_communication_sent(cursor, communication_id)
+    return communication_id
 
 
 def prepare_hr_package_communication(
@@ -1025,16 +1068,16 @@ def prepare_hr_package_communication(
     source_file_name,
     good_rows
 ):
-    subject = f"HR package ready: {source_file_name}"
+    subject = f"Paquete de RH listo: {source_file_name}"
 
     body = (
-        f"The uploaded file {source_file_name} passed validation.\n\n"
-        f"{good_rows} intern records were inserted or updated.\n\n"
-        "This package is ready for HR review.\n\n"
-        "This is a prepared communication record. No real email has been sent yet."
+        f"El archivo {source_file_name} paso la validacion.\n\n"
+        f"Se insertaron o actualizaron {good_rows} registros de practicantes.\n\n"
+        "El paquete esta listo para revision de RH."
     )
 
-    return insert_communication(
+    recipient = resolve_group_recipients(cursor, "HR", "dev.hr@example.com")
+    communication_id = insert_communication(
         cursor=cursor,
         intern_id=None,
         requisition_id=None,
@@ -1042,12 +1085,15 @@ def prepare_hr_package_communication(
         email_template_id="ET002",
         communication_type="HR Complete Package",
         recipient_group="HR",
-        recipient_email=resolve_group_recipients(cursor, "HR", "dev.hr@example.com"),
+        recipient_email=recipient,
         subject=subject,
         body=body,
         status="Prepared",
         error_message=None
     )
+    if _send_communication_now(recipient, subject, body):
+        _mark_communication_sent(cursor, communication_id)
+    return communication_id
 
 
 def prepare_coparmex_package_communication(
@@ -1055,28 +1101,32 @@ def prepare_coparmex_package_communication(
     source_file_id,
     source_file_name
 ):
-    subject = f"Coparmex package ready: {source_file_name}"
+    subject = f"Paquete Coparmex listo: {source_file_name}"
 
     body = (
-        f"The required Coparmex package for {source_file_name} is ready.\n\n"
-        "Only Coparmex-approved files should be included in the real email step.\n\n"
-        "This is a prepared communication record. No real email has been sent yet."
+        f"El paquete Coparmex para {source_file_name} esta listo.\n\n"
+        "RH: favor de revisar y reenviar a Coparmex la informacion correspondiente."
     )
 
-    return insert_communication(
+    # Process change: Coparmex notifications now go to RH, who forward to Coparmex.
+    recipient = resolve_group_recipients(cursor, "HR", "dev.hr@example.com")
+    communication_id = insert_communication(
         cursor=cursor,
         intern_id=None,
         requisition_id=None,
         file_id=source_file_id,
         email_template_id="ET003",
         communication_type="Coparmex Package",
-        recipient_group="Coparmex",
-        recipient_email=resolve_group_recipients(cursor, "Coparmex", "dev.coparmex@example.com"),
+        recipient_group="HR",
+        recipient_email=recipient,
         subject=subject,
         body=body,
         status="Prepared",
         error_message=None
     )
+    if _send_communication_now(recipient, subject, body):
+        _mark_communication_sent(cursor, communication_id)
+    return communication_id
 
 
 def prepare_intern_confirmation_communication(
@@ -1085,16 +1135,16 @@ def prepare_intern_confirmation_communication(
     source_file_name,
     good_rows
 ):
-    subject = f"File processed: {source_file_name}"
+    subject = f"Archivo procesado: {source_file_name}"
 
     body = (
-        f"The uploaded file {source_file_name} was processed successfully.\n\n"
-        f"{good_rows} records were accepted.\n\n"
-        "The HR team will contact the intern/applicant if anything else is needed.\n\n"
-        "This is a prepared communication record. No real email has been sent yet."
+        f"El archivo {source_file_name} se proceso correctamente.\n\n"
+        f"Se aceptaron {good_rows} registros.\n\n"
+        "El equipo de RH se pondra en contacto si se requiere algo adicional."
     )
 
-    return insert_communication(
+    recipient = resolve_applicant_recipient()
+    communication_id = insert_communication(
         cursor=cursor,
         intern_id=None,
         requisition_id=None,
@@ -1102,12 +1152,15 @@ def prepare_intern_confirmation_communication(
         email_template_id="ET004",
         communication_type="Intern Confirmation",
         recipient_group="Intern / Applicant",
-        recipient_email=resolve_applicant_recipient(),
+        recipient_email=recipient,
         subject=subject,
         body=body,
         status="Prepared",
         error_message=None
     )
+    if _send_communication_now(recipient, subject, body):
+        _mark_communication_sent(cursor, communication_id)
+    return communication_id
 
 
 def format_email_value(value):

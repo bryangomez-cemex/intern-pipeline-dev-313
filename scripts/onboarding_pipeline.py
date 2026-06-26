@@ -778,7 +778,7 @@ def build_coparmex_package(requisicion, candidate, hr_data=None):
         "Compañia": hr_data.get("compania"),
         "OI": hr_data.get("oi") or OI_BY_MANAGER.get(manager),
         "CC": hr_data.get("cc") or CC_BY_MANAGER.get(manager),
-        "Sueldo": FIXED_SUELDO,
+        "Sueldo": candidate.get("salario_mensual") or FIXED_SUELDO,
         "Fecha de ingreso": (requisicion or {}).get("fecha_inicio_solicitada"),
         "Fecha fin": (requisicion or {}).get("fecha_termino_solicitada"),
         "Ubicacion Estado de practicante": hr_data.get("ubicacion_estado"),
@@ -808,7 +808,8 @@ def finalize_onboarding(intern_id, hr_data=None):
         cur.execute(
             "SELECT intern_id, nombre, nombre_completo, email_personal, carrera, semestre, "
             "universidad, fecha_nacimiento, fecha_graduacion, requisition_id, "
-            "cemex_id, correo_institucional, ubicacion_udn, compania, ubicacion_estado, oi, cc "
+            "cemex_id, correo_institucional, ubicacion_udn, compania, ubicacion_estado, oi, cc, "
+            "salario_mensual "
             "FROM dim_interns WHERE intern_id = ?",
             intern_id,
         )
@@ -873,9 +874,11 @@ def finalize_onboarding(intern_id, hr_data=None):
                       "requisition_id": req_id, "missing": missing, "coparmex_sent": False}
         else:
             # Complete → send Coparmex (attach the alta) + notify RH of success.
-            send_email(recipients["Coparmex"] or "coparmex",
-                       f"FAVOR DE GESTIONAR CONVENIO – {candidate.get('nombre_completo')}",
+            # Coparmex notifications now go to RH, who forward to Coparmex.
+            send_email(recipients["HR"] or recipients["Coparmex"] or "hr",
+                       f"FAVOR DE GESTIONAR CONVENIO (RH reenviar a Coparmex) - {candidate.get('nombre_completo')}",
                        _format_coparmex_email(fields) +
+                       "\n\nRH: favor de reenviar esta informacion a Coparmex." +
                        "\n\n(Se adjunta NA FORMATO PARA ALTA DE PRACTICANTE COPARMEX.xlsx)")
             send_email(recipients["HR"] or "hr",
                        "Practicante dado de alta exitosamente",
