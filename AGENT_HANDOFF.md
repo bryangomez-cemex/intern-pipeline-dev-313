@@ -84,7 +84,7 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 ## Session log (newest first)
 
 ### 2026-06-26 — Codex
-- Updated routing and fallback behavior per Bryan's RH process notes; no deploy performed.
+- Updated routing and fallback behavior per Bryan's RH process notes.
 - Coparmex-ready emails now route to RH only via `RH_RECIPIENT_EMAILS`; RH reviews
   quickly and forwards to Coparmex manually. Removed active use of
   `COPARMEX_RECIPIENT_EMAILS` from onboarding/pipeline routing.
@@ -101,6 +101,32 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
   trigger the generic "Correccion requerida" email by themselves.
 - Updated README, technical manual, RH manual, behavior reference, workflow env,
   and Function App copies via `scripts/sync_function_modules.py`.
+
+### 2026-06-26 — Codex
+- Applied and deployed the latest onboarding/intake changes.
+- Azure SQL live:
+  - Re-applied `scripts/sql/2026-06_package1_document_requirements.sql`.
+  - Verified `RDT_ACTA_NACIMIENTO` is required for `PROC_ALTA` and `PROC_NEW_HIRE`.
+- Investigated Bryan's email with the positions Excel:
+  - `raw-uploads` had no recent blobs.
+  - `archive` only showed older `Layout_junio_2026.xlsx` rows and the Coparmex template.
+  - `dim_open_positions` had `0` rows and no `updated_at`.
+  - Most likely cause: the old Gmail intake required subject tag `[INTERN]`, so the email
+    was not picked up before reaching Blob/Function. This session changed the default
+    intake to process unread emails with allowed attachments without requiring a fixed
+    subject tag.
+- Deployed local source package from commit `f1a6f70` to Azure Function App
+  `mex-intern-pipeline-func-win`.
+  - Deployment id: `9f4a11cb-44a9-447b-9dd6-564699e0a425`.
+  - Azure result: `Deployment was successful.`
+  - Verified resource state `Running`, indexed functions `process_raw_upload`,
+    `setup_database`, `setup_database_on_startup`.
+  - Verified non-secret email settings: `EMAIL_SIMULATION_MODE=false`,
+    `RH_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com`, sender `practicantes@...azurecomm.net`.
+- GitHub push is currently blocked locally:
+  - `git push` failed with `could not read Username for 'https://github.com'`.
+  - `gh auth status` reports the GitHub token for `bryangomez-cemex` is invalid.
+  - Local commits exist and need to be pushed after re-authentication.
 
 ### 2026-06-26 — Codex
 - Updated convenio/NDA behavior in code and docs.
