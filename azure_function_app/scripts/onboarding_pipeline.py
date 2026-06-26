@@ -185,6 +185,8 @@ def classify_document(local_path, filename):
             blob = " ".join(_norm(c) for c in grid.values.ravel())
         except Exception:
             blob = ""
+        if "id vacante" in blob and ("estatus general" in blob or "promedio dias abierto" in blob):
+            return "open_positions"
         if "datos del practicante" in blob or "administracion de practicantes" in blob or "curp" in blob and "beneficiarios" in blob:
             return "alta_candidate"
         if "numero de puesto" in blob or "personal email" in blob or "cemex id" in blob or "cemex-id" in blob:
@@ -502,6 +504,8 @@ def process_onboarding_file(local_path, filename, meta=None):
         return process_candidate(local_path, meta)
     if kind == "hr_new_hires":
         return process_hr_new_hires(local_path, meta)
+    if kind == "open_positions":
+        return process_open_positions(local_path, meta)
     return {"type": kind, "status": "skipped_not_onboarding"}
 
 
@@ -711,6 +715,78 @@ def process_hr_new_hires(local_path, meta=None):
                   "count": len(processed), "interns": processed}
         print(f"HR NEW-HIRES → {len(processed)} new hire(s), Paquete 1 sent")
         return result
+    finally:
+        cur.close(); conn.close()
+
+
+# ============================================================
+# Open positions list (NOT a requisition) → dim_open_positions snapshot
+# ============================================================
+
+OPEN_POSITIONS_COLUMNS = {
+    "#": "numero", "no": "numero", "num": "numero",
+    "vacante": "vacante",
+    "id vacante": "id_vacante", "idvacante": "id_vacante",
+    "ubicacion": "ubicacion",
+    "promedio dias abierto": "promedio_dias_abierto", "dias abierto": "promedio_dias_abierto",
+    "responsable": "responsable",
+    "airh": "airh",
+    "jefe del puesto": "jefe_puesto", "jefe puesto": "jefe_puesto",
+    "estatus general": "estatus_general", "estatus": "estatus_general",
+}
+
+
+def _to_int(value):
+    try:
+        return int(float(value)) if value not in (None, "") else None
+    except Exception:
+        return None
+
+
+def process_open_positions(local_path, meta=None):
+    """Ingest a 'lista de posiciones actualmente abiertas' (open vacancies snapshot).
+    Each upload replaces the current snapshot (is_current). Not a requisition."""
+    meta = meta or {}
+    df = pd.read_excel(local_path, header=0)
+    headers = list(df.columns)
+    conn = azure_clients.get_sql_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("""IF OBJECT_ID('dbo.dim_open_positions','U') IS NULL
+            CREATE TABLE dbo.dim_open_positions (
+              position_row_id NVARCHAR(50) NOT NULL PRIMARY KEY, numero INT NULL,
+              vacante NVARCHAR(300) NULL, id_vacante NVARCHAR(50) NULL, ubicacion NVARCHAR(200) NULL,
+              promedio_dias_abierto INT NULL, responsable NVARCHAR(200) NULL, airh NVARCHAR(200) NULL,
+              jefe_puesto NVARCHAR(200) NULL, estatus_general NVARCHAR(200) NULL,
+              is_current BIT NOT NULL DEFAULT 1, source_blob NVARCHAR(400) NULL,
+              updated_at DATETIME2 DEFAULT SYSUTCDATETIME())""")
+        # snapshot replace: previous list is no longer current
+        cur.execute("UPDATE dbo.dim_open_positions SET is_current = 0")
+        loaded = 0
+        for _, raw in df.iterrows():
+            row = {}
+            for header, value in zip(headers, raw.tolist()):
+                key = re.sub(r"\s+", " ", _norm(str(header)).replace("-", " ").replace("/", " ")).strip()
+                field = OPEN_POSITIONS_COLUMNS.get(key)
+                if field and _clean(value) is not None:
+                    row[field] = _clean(value)
+            if not row.get("vacante"):
+                continue
+            idv = row.get("id_vacante")
+            if idv and str(idv).strip().upper() in ("NA", "N/A", "NONE", "-", ""):
+                idv = None
+            cur.execute(
+                """INSERT INTO dbo.dim_open_positions
+                   (position_row_id, numero, vacante, id_vacante, ubicacion, promedio_dias_abierto,
+                    responsable, airh, jefe_puesto, estatus_general, is_current, source_blob)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,1,?)""",
+                "POS-" + str(uuid.uuid4())[:8], _to_int(row.get("numero")), row.get("vacante"), idv,
+                row.get("ubicacion"), _to_int(row.get("promedio_dias_abierto")), row.get("responsable"),
+                row.get("airh"), row.get("jefe_puesto"), row.get("estatus_general"), meta.get("source_blob"))
+            loaded += 1
+        conn.commit()
+        print(f"OPEN POSITIONS → {loaded} posicion(es) abierta(s) cargadas")
+        return {"type": "open_positions", "status": "loaded", "count": loaded}
     finally:
         cur.close(); conn.close()
 
