@@ -1,5 +1,22 @@
 name: Deploy Azure Function - mex-intern-pipeline-func-win
 
+# This app is hosted on the Azure Functions **Flex Consumption** plan
+# (Linux, Python 3.11). Flex Consumption does NOT use the classic Kudu
+# /api/zipdeploy endpoint — it deploys via OneDeploy with a server-side
+# (Oryx) build from requirements.txt. The official Azure/functions-action
+# handles this when `remote-build: true` is set.
+#
+# Manual deploy (known-good, used for the production-readiness rollout):
+#   az functionapp deployment source config-zip \
+#     -g rg-intern-pipeline-dev -n mex-intern-pipeline-func-win \
+#     --src package.zip --build-remote true
+#
+# Auth: AZURE_FUNCTIONAPP_PUBLISH_PROFILE_WIN must hold the CURRENT publish
+# profile for this app. Refresh it after any credential rotation with:
+#   az functionapp deployment list-publishing-profiles \
+#     -g rg-intern-pipeline-dev -n mex-intern-pipeline-func-win --xml \
+#     | gh secret set AZURE_FUNCTIONAPP_PUBLISH_PROFILE_WIN
+
 on:
   push:
     branches:
@@ -9,6 +26,7 @@ on:
 env:
   AZURE_FUNCTIONAPP_NAME: mex-intern-pipeline-func-win
   PACKAGE_PATH: azure_function_app
+  PYTHON_VERSION: '3.11'
 
 jobs:
   deploy:
@@ -18,103 +36,35 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Prepare function package
+      - name: Prepare function package (source only — deps build server-side)
         run: |
           mkdir -p azure_function_app/scripts
           rsync -av scripts/ azure_function_app/scripts/
           if [ -f requirements.txt ]; then cp requirements.txt azure_function_app/requirements.txt; fi
 
+          # Ship source only: Flex remote build (Oryx) compiles native wheels
+          # (pyodbc, cryptography) against the host's glibc, so we must NOT
+          # bundle a locally built .python_packages.
           find azure_function_app -type d -name "__pycache__" -prune -exec rm -rf {} +
           find azure_function_app -type f -name "*.pyc" -delete
-          rm -rf azure_function_app/.venv azure_function_app/data
+          rm -rf azure_function_app/.venv azure_function_app/data azure_function_app/.python_packages
 
           test -f azure_function_app/function_app.py
           test -f azure_function_app/host.json
           test -f azure_function_app/requirements.txt
 
-          # Build dependencies INSIDE the official Azure Functions Python base image
-          # so native wheels (cryptography, pyodbc, pandas) match the runtime host's
-          # glibc. Building on the Ubuntu runner produced a cryptography wheel that
-          # required GLIBC_2.33, which the Functions host lacks, breaking azure-identity.
-          docker run --rm -v "$PWD/azure_function_app":/pkg -w /pkg \
-            mcr.microsoft.com/azure-functions/python:4-python3.11 \
-            bash -c "python -m pip install --upgrade pip && python -m pip install -r requirements.txt --target .python_packages/lib/site-packages"
-
-      - name: Zip function package
-        run: |
-          cd azure_function_app
-          zip -r ../function-package.zip .
-
-      - name: Extract Kudu credentials
-        id: kudu
-        env:
-          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_WIN }}
-        run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import os
-          import xml.etree.ElementTree as ET
-          from urllib.parse import urlparse
-
-          xml = os.environ["PUBLISH_PROFILE"]
-          root = ET.fromstring(xml)
-
-          selected = None
-          for p in root.findall(".//publishProfile"):
-              url = p.attrib.get("publishUrl", "")
-              if ".scm." in url:
-                  selected = p
-                  break
-
-          if selected is None:
-              raise SystemExit("No SCM/Kudu publish profile found")
-
-          raw_url = selected.attrib["publishUrl"]
-          username = selected.attrib["userName"]
-          password = selected.attrib["userPWD"]
-
-          if not raw_url.startswith("http"):
-              raw_url = "https://" + raw_url
-
-          parsed = urlparse(raw_url)
-          host = parsed.netloc or parsed.path.split("/")[0]
-          host = host.replace(":443", "")
-
-          print(f"url=https://{host}/api/zipdeploy")
-          print(f"username={username}")
-          print(f"password={password}")
-          PY
-
-      - name: Deploy package to Kudu zipdeploy
-        env:
-          KUDU_URL: ${{ steps.kudu.outputs.url }}
-          KUDU_USER: ${{ steps.kudu.outputs.username }}
-          KUDU_PASS: ${{ steps.kudu.outputs.password }}
-        run: |
-          echo "::add-mask::$KUDU_USER"
-          echo "::add-mask::$KUDU_PASS"
-          echo "Deploying to $KUDU_URL"
-
-          http_code=$(curl -X POST "${KUDU_URL}?isAsync=true" \
-            -u "$KUDU_USER:$KUDU_PASS" \
-            --data-binary @"function-package.zip" \
-            -H "Content-Type: application/zip" \
-            --silent \
-            --show-error \
-            --output kudu-response.txt \
-            --write-out "%{http_code}")
-
-          echo "Kudu HTTP status: $http_code"
-          echo "Kudu response:"
-          cat kudu-response.txt || true
-
-          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
-            exit 1
-          fi
+      - name: Deploy to Azure Functions (Flex Consumption, remote build)
+        uses: Azure/functions-action@v2
+        with:
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          package: ${{ env.PACKAGE_PATH }}
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE_WIN }}
+          remote-build: true
 
       - name: Deployment done
-        run: echo "Deployed to mex-intern-pipeline-func-win"
+        run: echo "Deployed to ${{ env.AZURE_FUNCTIONAPP_NAME }}"
