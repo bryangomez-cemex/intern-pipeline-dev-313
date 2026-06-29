@@ -2529,7 +2529,19 @@ def process_lifecycle_row(cursor, row, classification, run_id, file_id, row_numb
             return matched_intern_id, row_errors, False
 
         target_intern_id = matched_intern_id or intern_id
-        previous_status = get_effective_intern_status(cursor, matched_intern_id) if matched_intern_id else None
+        # Read the PERSISTED status (dim_interns.status_id) BEFORE the upsert below so
+        # an active->baja transition is detected correctly. Reading the latest lifecycle
+        # event here (the old behavior) already included this row's own inactive
+        # observation, so the transition looked like inactive->inactive and the baja
+        # email was never prepared.
+        previous_status = None
+        if matched_intern_id:
+            cursor.execute(
+                "SELECT status_id FROM dbo.dim_interns WHERE intern_id = ?",
+                matched_intern_id,
+            )
+            _prev_row = cursor.fetchone()
+            previous_status = _prev_row[0] if _prev_row else None
         incoming_status = clean_value(row.get("Estatus"))
         insert_or_update_intern(cursor, row, intern_id_override=target_intern_id)
 
