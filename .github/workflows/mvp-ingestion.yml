@@ -7,8 +7,6 @@ on:
         description: "Blob prefix to process"
         required: false
         default: ""
-  schedule:
-    - cron: "*/5 * * * *"
 
 # Never run two ingestion jobs at once. If a scheduled run is still in flight
 # when the next one fires, the new run waits instead of racing it for the same
@@ -32,12 +30,6 @@ jobs:
       SEND_EMAILS: "false"
       EMAIL_DRY_RUN: "true"
       MVP_PREFIX: ${{ github.event.inputs.prefix }}
-      IMAP_HOST: imap.gmail.com
-      IMAP_PORT: "993"
-      IMAP_USERNAME: ${{ secrets.IMAP_USERNAME }}
-      IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
-      INTAKE_EMAIL_FOLDER: INBOX
-      INTAKE_SUBJECT_TAG: ""
 
     steps:
       - name: Checkout repo
@@ -61,10 +53,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Pull tagged Gmail attachments into raw-uploads
-        run: |
-          python scripts/intake_gmail_attachments.py
 
       - name: Run ingestion
         run: |

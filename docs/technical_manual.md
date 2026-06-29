@@ -1,6 +1,6 @@
 # Manual tecnico - Sistema de practicantes CEMEX
 
-Version: 2026-06-26
+Version: 2026-06-29
 Ambiente documentado: Azure dev/productivo controlado para automatizacion de practicantes
 Repositorio: `/Users/bryangomezcemex/intern-system-pipeline`
 Owner operativo: Bryan Gomez, CEMEX HR
@@ -21,7 +21,7 @@ El sistema automatiza el ciclo de vida de practicantes para CEMEX HR:
 - Usa Azure AI Document Intelligence cuando un PDF escaneado o imagen no tiene texto legible.
 - Actualiza Azure SQL con practicantes, documentos, requisiciones, validaciones, comunicaciones y eventos.
 - Enriquece campos organizacionales usando reglas de matching.
-- Envia correos reales por Azure Communication Services cuando `EMAIL_SIMULATION_MODE=false`.
+- Envia correos reales por Gmail SMTP cuando `EMAIL_SIMULATION_MODE=false`.
 - Expone vistas limpias para Power BI sin requerir DAX complejo.
 
 Flujo resumido:
@@ -34,7 +34,7 @@ Email / Gmail intake / carga manual
   -> Azure SQL operational tables
   -> Azure SQL Power BI views
   -> Power BI Service
-  -> Correos ACS cuando aplica
+  -> Correos Gmail SMTP cuando aplica
 ```
 
 ## 2. Stack completo
@@ -51,7 +51,6 @@ Email / Gmail intake / carga manual
 - `azure-functions`
 - `azure-storage-blob`
 - `azure-identity`
-- `azure-communication-email`
 - `pandas`
 - `openpyxl`
 - `pyodbc`
@@ -65,7 +64,6 @@ Email / Gmail intake / carga manual
 - Azure Blob Storage.
 - Azure SQL Database.
 - Azure AI Document Intelligence.
-- Azure Communication Services Email.
 - Azure Application Insights / Azure Monitor.
 - Azure Event Grid para el trigger de blobs.
 - Azure Container Instances para utilidades temporales de SQL cuando se necesita.
@@ -100,8 +98,6 @@ Function App settings, `.env` local o recursos de Azure.
 | Blob container | `archive` | Archivos procesados, templates y archivo historico |
 | Blob container | `error-reports` | Reportes de error |
 | Document Intelligence | `docintel-intern-pipeline-dev` | OCR / lectura de documentos escaneados |
-| ACS Communication | `intern-pipeline-comm-dev` | Envio de correos |
-| ACS Email Service | `intern-pipeline-email-dev` | Servicio de correo |
 | Application Insights | `mex-intern-pipeline-func-win` | Logs y monitoreo |
 
 Estado importante de correo live:
@@ -111,9 +107,9 @@ Estado importante de correo live:
 - `RH_RECIPIENT_EMAILS` esta apuntando a Bryan para pruebas controladas.
 - La gestion Coparmex ya no usa un destinatario externo separado; se envia a RH
   para revision rapida y reenvio manual a Coparmex.
-- El sender verificado actual es `practicantes@...azurecomm.net`.
-- El dominio custom `cemex.com` existe en ACS, pero esta pendiente de verificacion
-  DNS antes de poder usar un remitente `@cemex.com`.
+- El sender actual se configura con `SMTP_FROM_EMAIL` y usa el Gmail app account.
+- Los recursos ACS pueden existir en Azure, pero ya no son el camino activo de
+  envio de correos.
 
 ## 4. Estructura del repositorio
 
@@ -590,7 +586,7 @@ nuevos se deben preferir `vw_powerbi_*` y `vw_canonical_*`.
 Proveedor actual:
 
 ```text
-Azure Communication Services Email
+Gmail SMTP
 ```
 
 Archivo:
@@ -599,17 +595,27 @@ Archivo:
 scripts/email_service.py
 ```
 
-No se usa Power Automate para el flujo actual. Microsoft Graph y SMTP existen como
-rutas legacy/opcionales, pero el sistema live usa ACS.
+No se usa Power Automate para el flujo actual. El sistema live usa Gmail IMAP
+para intake programado y Gmail SMTP para envio.
 
 ### 9.2 Variables principales
 
 ```text
-EMAIL_PROVIDER=azure_communication_services
+EMAIL_PROVIDER=smtp
 EMAIL_SIMULATION_MODE=true|false
-ACS_CONNECTION_STRING=<secret>
-ACS_SENDER_EMAIL=<verified sender>
-ACS_SENDER_NAME=Programa de Practicantes CEMEX
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=<gmail address>
+SMTP_PASSWORD=<gmail app password>
+SMTP_FROM_EMAIL=<gmail address>
+SMTP_FROM_NAME=Programa de Practicantes CEMEX
+ENABLE_GMAIL_INTAKE=true
+IMAP_HOST=imap.gmail.com
+IMAP_PORT=993
+IMAP_USERNAME=<gmail address>
+IMAP_PASSWORD=<gmail app password>
+INTAKE_EMAIL_FOLDER=INBOX
+INTAKE_SUBJECT_TAG=
 RH_RECIPIENT_EMAILS=<lista de correos>
 POWERBI_DASHBOARD_URL=<url del reporte>
 ```
@@ -640,7 +646,7 @@ Regla de seguridad:
 
 ### 9.4 Attachments
 
-ACS soporta attachments via `email_service._build_attachments`.
+Gmail SMTP soporta attachments via `email_service._build_attachments`.
 
 Soportes:
 
@@ -666,7 +672,7 @@ Efectos:
 1. El practicante deja de contar como activo.
 2. Se crea evento en `fact_intern_lifecycle_events`.
 3. Se prepara comunicacion en `fact_communications`.
-4. Se intenta enviar correo real a RH por ACS si `EMAIL_SIMULATION_MODE=false`.
+4. Se intenta enviar correo real a RH por Gmail SMTP si `EMAIL_SIMULATION_MODE=false`.
 
 Subject:
 
@@ -892,7 +898,7 @@ Validar modo de envio sin imprimir secrets:
 az functionapp config appsettings list \
   -g rg-intern-pipeline-dev \
   -n mex-intern-pipeline-func-win \
-  --query "[?name=='EMAIL_SIMULATION_MODE' || name=='RH_RECIPIENT_EMAILS' || name=='ACS_SENDER_EMAIL'].{name:name,value:value}"
+  --query "[?name=='EMAIL_SIMULATION_MODE' || name=='RH_RECIPIENT_EMAILS' || name=='SMTP_FROM_EMAIL' || name=='SMTP_USERNAME'].{name:name,value:value}"
 ```
 
 Interpretacion:
@@ -904,7 +910,7 @@ Interpretacion:
 
 Reglas:
 
-- Nunca commitear `.env`, connection strings, SQL passwords, ACS keys ni Document Intelligence keys.
+- Nunca commitear `.env`, connection strings, SQL passwords, Gmail app passwords ni Document Intelligence keys.
 - Nunca imprimir secrets completos en terminal o en manuales.
 - Usar Function App settings para secretos en Azure.
 - Usar `.env` solo localmente.
@@ -922,7 +928,7 @@ El costo depende del uso, pero para el volumen actual el estimado mensual es baj
 | Azure Functions Flex | ejecuciones y memoria | 0 a 2 USD |
 | Blob Storage Hot LRS | GB almacenado y operaciones | menos de 1 USD con pocos MB |
 | Document Intelligence F0 | free tier | 0 USD mientras siga en F0 y dentro del limite |
-| ACS Email | emails enviados y MB transferidos | centavos para cientos/miles de emails |
+| Gmail SMTP | incluido en Gmail, sujeto a limites de envio | 0 USD directo; depende de la cuenta |
 | Application Insights | ingesta de logs | 0 a 5 USD si el volumen es bajo |
 
 Estimado total actual:
@@ -935,7 +941,7 @@ Estimado total actual:
 
 - Re-subir el roster W1 completo con las 302 filas y columnas reales `Importe` /
   `ImporteTotal` para eliminar aproximaciones de costo.
-- Verificar dominio `cemex.com` en ACS con DNS corporativo.
+- Mantener y rotar el Gmail app password usado para intake/envio.
 - Configurar CI/CD con OIDC para que GitHub Actions despliegue Flex correctamente.
 - Decidir si se quiere digest programado de contratos vencidos / activos para RH.
 - Decidir si `dim_open_positions` debe registrar runs formales tipo `PROC_POSITIONS_SYNC`.

@@ -19,13 +19,15 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
   - Firewall: Bryan's IP changes (mobile). Add a temp single-IP rule when local SQL access is blocked, e.g. `az sql server firewall-rule create -g rg-intern-pipeline-dev -s rg-intern-system-devbge --name claude-tmp --start-ip-address <ip> --end-ip-address <ip>`.
 - Storage: `rginternpipelinedevb961` (containers raw-uploads, archive, error-reports).
 - Document Intelligence: `docintel-intern-pipeline-dev` (`DOC_INTEL_ENDPOINT`/`DOC_INTEL_KEY`).
-- Email (ACS): resource `intern-pipeline-comm-dev`, email service `intern-pipeline-email-dev`.
-  - AzureManagedDomain `cca4d0a7-2ca3-4728-a5cd-5dab25a27ac4.azurecomm.net` (verified).
-  - Custom domain `cemex.com` exists but is **DNS-unverified** (no DNS access).
-  - Sender: **`practicantes@…azurecomm.net`** ("Programa de Practicantes CEMEX").
+- Email send/receive now uses Gmail app credentials.
+  - Inbound: Azure Function timer `gmail_intake_timer` reads Gmail IMAP
+    (`IMAP_USERNAME` / `IMAP_PASSWORD`) every 5 minutes.
+  - Outbound: Function App Gmail SMTP (`SMTP_USERNAME` / `SMTP_PASSWORD`).
+  - ACS email resources may still exist in Azure but are no longer the active
+    application email path.
 
 **Email behavior (live)**
-- `email_service.py` (ACS) is the single sender; gated by `EMAIL_SIMULATION_MODE`.
+- `email_service.py` (Gmail SMTP) is the single sender; gated by `EMAIL_SIMULATION_MODE`.
   On the live app it is **`false` (real sends ON)**. Attachments are supported.
 - Recipients: `RH_RECIPIENT_EMAILS` is the single source of truth for RH and
   Coparmex-ready emails. Currently = `bryan.gomez@ext.cemex.com` (testing).
@@ -44,7 +46,8 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
   splitting on `GO` and executing via `azure_clients.get_sql_connection()`.
 
 **Conventions**
-- Never print/commit secrets (`.env`, connection strings, ACS/SQL keys). `.env` and
+- Never print/commit secrets (`.env`, connection strings, Gmail app passwords,
+  SQL keys). `.env` and
   `EXAMPLES/` are gitignored. `ROTATE_SECRETS.md` tracks exposed creds Bryan must rotate.
 - Power BI: only the VALUES need to be in Spanish (column/table names can stay English).
 - Production deploys + pushes to `main` need Bryan's explicit go-ahead (safety guard).
@@ -64,8 +67,8 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
   `az ... config-zip --build-remote` (works). To fix CI properly, configure OIDC
   (`azure/login`) + `az functionapp deployment`, which needs a service principal /
   federated credential (app registration may be restricted in the CEMEX tenant).
-- **Custom email domain**: verify `cemex.com` in ACS (needs DNS records) to send from a
-  `@cemex.com` address and improve deliverability. Needs DNS access Bryan doesn't have.
+- **Gmail app password**: rotate if it is exposed, keep it only in Azure Function
+  App settings, and avoid committing it to docs or `.env`.
 - **Open positions → process type**: `dim_open_positions` snapshot is a separate path,
   not tied to the `PROC_*` intern lifecycle process types. Add `PROC_POSITIONS_SYNC`
   if position uploads should be tracked in `fact_pipeline_runs` like other processes.
@@ -82,6 +85,25 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 ---
 
 ## Session log (newest first)
+
+### 2026-06-29 — Codex
+- Switched active email path away from Azure Communication Services.
+- `scripts/email_service.py` now sends through Gmail SMTP using
+  `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM_EMAIL`; Function App copy synced.
+- Added Azure Function timer `gmail_intake_timer` (every 5 minutes) so Azure reads
+  Gmail IMAP directly and uploads allowed attachments to `raw-uploads`.
+- Moved Gmail intake module into `azure_function_app/scripts/` and changed its
+  download temp folder to `/tmp/email_intake_downloads` for Azure Functions.
+- Changed `.github/workflows/mvp-ingestion.yml` to manual blob-ingestion only; it
+  no longer schedules Gmail intake or references IMAP secrets.
+- Configured live Function App app settings for Gmail IMAP/SMTP and removed
+  `ACS_CONNECTION_STRING`, `ACS_SENDER_EMAIL`, and `ACS_SENDER_NAME`.
+- Removed obsolete GitHub Secrets `IMAP_USERNAME` and `IMAP_PASSWORD` because
+  GitHub no longer owns Gmail intake.
+- Added `ROTATE_SECRETS.md` note for the Gmail app password because it was shared
+  during setup; rotate after confirming the new path works.
+- Validated with `py_compile`, `.venv/bin/python scripts/check_function_readiness.py`,
+  `.venv/bin/python scripts/smoke_e2e_pipeline.py`, and `git diff --check`.
 
 ### 2026-06-29 — Claude (Opus 4.8)
 - Added **costos por compania**: `razon_social_hc` on `dim_interns` (RAZON SOCIAL HC =

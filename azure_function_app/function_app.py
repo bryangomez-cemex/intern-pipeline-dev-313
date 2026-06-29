@@ -69,6 +69,30 @@ def process_raw_upload(inputblob: func.InputStream):
         raise
 
 
+@app.schedule(
+    schedule="0 */5 * * * *",
+    arg_name="gmail_timer",
+    run_on_startup=False,
+    use_monitor=True,
+)
+def gmail_intake_timer(gmail_timer: func.TimerRequest):
+    if os.getenv("ENABLE_GMAIL_INTAKE", "true").lower() not in {"1", "true", "yes"}:
+        logging.info("Gmail intake timer skipped because ENABLE_GMAIL_INTAKE is disabled")
+        return
+
+    if gmail_timer.past_due:
+        logging.warning("Gmail intake timer is running late")
+
+    try:
+        from intake_gmail_attachments import intake_gmail_attachments
+
+        uploaded = intake_gmail_attachments()
+        logging.info("Gmail intake timer uploaded %s attachment(s): %s", len(uploaded), uploaded)
+    except Exception:
+        logging.exception("Gmail intake timer failed")
+        raise
+
+
 SQL_SETUP_ORDER = [
     "00_create_core_legacy_tables.sql",
     "00_create_dim_interns.sql",

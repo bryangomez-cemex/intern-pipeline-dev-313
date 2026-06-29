@@ -8,15 +8,15 @@ The pipeline supports:
 - Accepted new hires: Excel/CSV intake, intern record creation/update, missing data/document detection, correction requests, HR/Coparmex/applicant package metadata.
 - Current interns: Excel/CSV sync, active/inactive/baja detection, upcoming expiration alerts, missing/expired document checks, and Power BI-ready reporting.
 
-Keep email sending disabled until corporate Graph/SMTP approval is complete.
+Live email uses the configured Gmail app account for intake and SMTP sending.
 
 ## Architecture
 
-Email intake, Gmail dev intake, Azure/manual upload, or local upload drops files into Azure Blob `raw-uploads`.
+Gmail intake in Azure, Azure/manual upload, or local upload drops files into Azure Blob `raw-uploads`.
 
 Processing paths:
 
-- Local/Gmail dev: `scripts/run_intake_pipeline.py`
+- Local/dev intake: `scripts/run_intake_pipeline.py`
 - Manual: `scripts/process_blob_file.py`
 - Azure automation: `azure_function_app/function_app.py`
 
@@ -122,7 +122,7 @@ Local folder intake:
 python3 scripts/run_intake_pipeline.py local
 ```
 
-Gmail dev intake:
+Gmail local test intake:
 
 ```bash
 python3 scripts/run_intake_pipeline.py gmail
@@ -200,20 +200,23 @@ The legacy `vw_full_mvp_*` views remain available for compatibility, but new rep
 - Email alert recommendations: `docs/email_alert_recommendations.md`
 - Schema simplification notes: `docs/schema_simplification.md`
 
-## Email (Azure Communication Services)
+## Email (Gmail SMTP)
 
-Email from step 5 onward uses **Azure Communication Services** (no Microsoft Graph,
-no SMTP), via `scripts/email_service.py` (`send_email(...)`). `onboarding_pipeline.send_email`
-delegates to it. Config is read only from environment variables — set these locally
+Email from step 5 onward uses **Gmail SMTP**, via `scripts/email_service.py`
+(`send_email(...)`). `onboarding_pipeline.send_email` delegates to it. Config is
+read only from environment variables — set these locally
 (`.env`) and in the **Azure Function App → Settings → Environment variables / Application
 settings**:
 
 ```
-EMAIL_PROVIDER=azure_communication_services
+EMAIL_PROVIDER=smtp
 EMAIL_SIMULATION_MODE=true      # safe default; false to send for real
-ACS_CONNECTION_STRING=...
-ACS_SENDER_EMAIL=...
-ACS_SENDER_NAME=Intern Pipeline
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=...
+SMTP_PASSWORD=...
+SMTP_FROM_EMAIL=...
+SMTP_FROM_NAME=Programa de Practicantes CEMEX
 TEST_EMAIL_TO=...
 RH_RECIPIENT_EMAILS=bryan.gomez@ext.cemex.com,valeria.acunaam@cemex.com
 ```
@@ -223,4 +226,4 @@ Coparmex-ready packages. RH reviews those emails and forwards them to Coparmex.
 Practicantes usually use CEMEX emails, while new hires may still use personal
 emails until their CEMEX account exists — `resolve_person_email()` picks the
 correct field by person/process type.
-Test locally with `python scripts/test_acs_email.py`.
+Test locally with `python scripts/test_email_service.py`.

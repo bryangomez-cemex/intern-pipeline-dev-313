@@ -295,13 +295,13 @@ def validate_candidate(fields, requisicion=None):
 
 
 # ============================================================
-# email — delegates to the Azure Communication Services service
+# email — delegates to the central SMTP service
 # ============================================================
 
 def send_email(intended_to, subject, body, attachments=None, to_name=None, cc=None, metadata=None):
-    """Thin wrapper over email_service (ACS). Keeps the existing call sites:
+    """Thin wrapper over email_service. Keeps the existing call sites:
     plain-text bodies are converted to HTML; attachments are passed through
-    (ACS attachment send is TODO in email_service)."""
+    to the central sender."""
     if not intended_to:
         return {"status": "failed", "provider": email_service.PROVIDER, "error": "missing recipient"}
     result = email_service.send_email(

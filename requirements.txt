@@ -7,4 +7,3 @@ pandas
 openpyxl
 requests
 pypdf
-azure-communication-email

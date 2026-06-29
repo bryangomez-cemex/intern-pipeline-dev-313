@@ -4,10 +4,9 @@ A complete map of what the system sends, receives, validates, and decides — so
 can be reviewed and adjusted. Use the ** knob** (config you can change) and
 **decision/gap** markers to drive changes.
 
-Last reviewed: 2026-06-26. Current email state on the live Function App:
+Last reviewed: 2026-06-29. Current email state on the live Function App:
 `EMAIL_SIMULATION_MODE=false` (real sends), `RH_RECIPIENT_EMAILS` =
-`bryan.gomez@ext.cemex.com`, sender
-`practicantes@cca4d0a7-…azurecomm.net`.
+`bryan.gomez@ext.cemex.com`, sender via Gmail SMTP app credentials.
 
 ---
 
@@ -16,13 +15,14 @@ Last reviewed: 2026-06-26. Current email state on the live Function App:
 | Path | Trigger | Timing | Real email? |
 |---|---|---|---|
 | Function App `process_raw_upload` | Event Grid on blob create in `raw-uploads/` | Near-instant | **Yes** |
-| GitHub cron `mvp-ingestion.yml` | `*/5 * * * *` | Every 5 min | No (simulation) |
-| Gmail IMAP intake (in the cron) | Unread emails with allowed attachments; optional subject filter only if configured | Every 5 min | n/a |
+| Azure Function `gmail_intake_timer` | Timer trigger | Every 5 min | n/a |
+| GitHub manual `mvp-ingestion.yml` | Manual `workflow_dispatch` for blob backfill | On demand | No (simulation) |
+| Gmail IMAP intake (in Azure) | Unread emails with allowed attachments; optional subject filter only if configured | Every 5 min | n/a |
 
 - Ignored blob prefixes: `archive/ processed/ failed/ error-reports/ .`
 - Email context (`sender_email`, `email_subject`, `body_fields`, `requisition_id`)
-  is read from **blob metadata** set by the intake layer (Gmail/manual upload or
-  whichever intake writes the blob metadata).
+  is read from **blob metadata** set by the intake layer. Azure reads Gmail,
+  uploads attachments to `raw-uploads`, and stamps that metadata on each blob.
 - A processed-blob guard (`fact_processed_blobs`) stops double-processing; the
   instant Function App trigger normally wins, the cron is a backstop.
 
@@ -30,19 +30,19 @@ Last reviewed: 2026-06-26. Current email state on the live Function App:
 
 ## 2. Two parallel "email" systems
 
-1. **Live ACS** — `onboarding_pipeline.py` + `document_pipeline.py` →
-   `email_service.py` → Azure Communication Services. Gated by
+1. **Live Gmail SMTP** — `onboarding_pipeline.py` + `document_pipeline.py` →
+   `email_service.py` → Gmail SMTP. Gated by
    `EMAIL_SIMULATION_MODE` only. **These actually send.**
-2. **Prepared queue + live ACS best-effort** — `pipeline_service.py` writes
+2. **Prepared queue + live SMTP best-effort** — `pipeline_service.py` writes
    `fact_communications` rows and then attempts to send the prepared communication
-   through ACS when `EMAIL_SIMULATION_MODE=false`. Baja, correction, HR package,
+   through Gmail SMTP when `EMAIL_SIMULATION_MODE=false`. Baja, correction, HR package,
    Coparmex package, and file processed communications use this path.
 
 ---
 
 ## 3. Live onboarding emails (the ~12-step flow)
 
-From `practicantes@…azurecomm.net`.
+From the Gmail app account configured in `SMTP_FROM_EMAIL`.
 
 | # | Fires when | To | Subject | Body gist | Attach |
 |---|---|---|---|---|---|
@@ -59,7 +59,7 @@ From `practicantes@…azurecomm.net`.
 | 7c | Finalize, unresolved data missing | HR | `Practicante procesado – faltan datos para Coparmex ({nombre})` | Rare case: fields matching could not resolve | — |
 | 7d | Current sync leaves org fields empty | HR | `Campos organizacionales por completar – {archivo}` | Excel rows for manual completion | Excel |
 
-**Attachments**: ACS attachment sending is wired through
+**Attachments**: SMTP attachment sending is wired through
 `email_service._build_attachments`. Unreadable attachments are skipped with a log
 note instead of failing the whole email.
 
@@ -71,7 +71,7 @@ note instead of failing the whole email.
 ready` (→ RH for review/forward), `File processed` (→ Intern), and
 **`Baja De Practicante - {nombre}`** (→ HR, template `ET_BAJA`, full intern
 dossier + "FAVOR DE GESTIONAR BAJA"). These are stored in `fact_communications`
-and sent live best-effort through ACS when email simulation is off.
+and sent live best-effort through Gmail SMTP when email simulation is off.
 
 ---
 
@@ -129,8 +129,9 @@ and sent live best-effort through ACS when email simulation is off.
 
 ## 9. Config knobs (env) ⚙️
 
-`EMAIL_SIMULATION_MODE`, `ACS_SENDER_EMAIL`, `ACS_SENDER_NAME`,
-`ACS_CONNECTION_STRING`, `RH_RECIPIENT_EMAILS`, `POWERBI_DASHBOARD_URL`,
+`EMAIL_SIMULATION_MODE`, `EMAIL_PROVIDER`, `SMTP_HOST`, `SMTP_PORT`,
+`SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME`,
+`RH_RECIPIENT_EMAILS`, `POWERBI_DASHBOARD_URL`,
 `DOC_INTEL_ENDPOINT/KEY`,
 `DEV_EMAIL_OVERRIDE`. Inert legacy: `EMAIL_MODE`, `SEND_EMAILS`.
 
@@ -138,7 +139,8 @@ and sent live best-effort through ACS when email simulation is off.
 
 ## 10. Open decisions ⚠️
 
-1. **Sender `@azurecomm.net`** (spam-prone); `cemex.com` exists but DNS-unverified.
+1. **Gmail app mailbox ownership** — keep app password rotated and restricted to
+   the intake/sender mailbox.
 2. **Full cost sync** — re-upload W1 roster with real `Importe` / `ImporteTotal`.
 3. **Open positions process tracking** — decide if `dim_open_positions` uploads
    should create formal `PROC_POSITIONS_SYNC` runs.

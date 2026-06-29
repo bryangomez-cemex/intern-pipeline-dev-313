@@ -1001,7 +1001,7 @@ def resolve_applicant_recipient(intern_email=None):
 
 
 def _send_communication_now(recipient_email, subject, body):
-    """Send a prepared communication live via ACS (respects EMAIL_SIMULATION_MODE).
+    """Send a prepared communication live via the central email service.
     recipient_email may be one address or a ','/';'-separated list. Placeholder
     *.example.com addresses are skipped. Best-effort: failures are logged and never
     break pipeline processing. Returns True if at least one address was sent/simulated."""
@@ -1259,8 +1259,8 @@ def fetch_baja_context(cursor, intern_id, fallback_status=None):
 
 
 def _send_baja_email_now(cursor, subject, body):
-    """Send the baja notification to HR via live ACS (respects EMAIL_SIMULATION_MODE
-    like every other email). Best-effort: a send failure never breaks row
+    """Send the baja notification to HR via the central email service.
+    Best-effort: a send failure never breaks row
     processing. Returns True when at least one recipient was sent/simulated."""
     try:
         import onboarding_pipeline

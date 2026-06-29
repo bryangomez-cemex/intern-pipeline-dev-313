@@ -25,6 +25,18 @@ Rotating it is good hygiene but is not security-critical for the pipeline.
 - [ ] Under **Overview** → click **Get publish profile** → then **Reset publish profile**
 - [ ] Download the new publish profile and update any deployment credentials or GitHub secrets that use it (e.g. `AZURE_FUNCTIONAPP_PUBLISH_PROFILE`)
 
+## 3. Gmail app password (`reddetalentocemex@gmail.com`)
+
+The Gmail app password was shared in a working session to configure the live
+pipeline. It should be rotated after the Azure Function App Gmail IMAP/SMTP
+configuration is confirmed working.
+
+- [ ] Create a new Google app password for `reddetalentocemex@gmail.com`
+- [ ] Update Azure Function App settings `IMAP_PASSWORD` and `SMTP_PASSWORD`
+- [ ] Restart Function App `mex-intern-pipeline-func-win`
+- [ ] Send a test email with an allowed attachment to confirm intake still works
+- [ ] Confirm outbound SMTP sends from the Gmail account
+
 ## After rotation
 
 - Verify the pipeline can still connect to Azure SQL (Gate 1 test)
