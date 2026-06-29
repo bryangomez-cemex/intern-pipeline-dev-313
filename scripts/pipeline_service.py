@@ -1889,7 +1889,8 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
                 ? AS fecha_de_ingreso,
                 ? AS fecha_contrato_vence,
                 ? AS importe,
-                ? AS importe_total
+                ? AS importe_total,
+                ? AS razon_social_hc
         ) AS source
         ON target.intern_id = source.intern_id
 
@@ -1926,6 +1927,7 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
                 fecha_contrato_vence = source.fecha_contrato_vence,
                 importe = source.importe,
                 importe_total = source.importe_total,
+                razon_social_hc = source.razon_social_hc,
                 updated_at = SYSUTCDATETIME()
 
         WHEN NOT MATCHED THEN
@@ -1961,7 +1963,8 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
                 fecha_de_ingreso,
                 fecha_contrato_vence,
                 importe,
-                importe_total
+                importe_total,
+                razon_social_hc
             )
             VALUES (
                 source.intern_id,
@@ -1995,7 +1998,8 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
                 source.fecha_de_ingreso,
                 source.fecha_contrato_vence,
                 source.importe,
-                source.importe_total
+                source.importe_total,
+                source.razon_social_hc
             );
         """,
         intern_id,
@@ -2030,6 +2034,7 @@ def insert_or_update_intern(cursor, row, intern_id_override=None):
         fecha_contrato_vence,
         clean_value(row.get("Importe")),
         clean_value(row.get("ImporteTotal")),
+        clean_value(row.get("RAZON SOCIAL HC")),
     )
 
     upsert_manager_assignment_from_row(cursor, row)
