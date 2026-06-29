@@ -85,9 +85,35 @@ def gmail_intake_timer(gmail_timer: func.TimerRequest):
 
     try:
         from intake_gmail_attachments import intake_gmail_attachments
+        from azure_clients import get_blob_service_client
+        from pipeline_service import process_blob_by_name
 
         uploaded = intake_gmail_attachments()
         logging.info("Gmail intake timer uploaded %s attachment(s): %s", len(uploaded), uploaded)
+
+        raw_container = os.getenv("RAW_UPLOADS_CONTAINER", "raw-uploads")
+        max_pending = int(os.getenv("GMAIL_INTAKE_MAX_PENDING_BLOBS", "25"))
+        container_client = get_blob_service_client().get_container_client(raw_container)
+        pending_blobs = [
+            blob for blob in container_client.list_blobs()
+            if not should_ignore_blob(blob.name)
+        ]
+        pending_blobs.sort(key=lambda blob: blob.last_modified)
+
+        processed = 0
+        for blob in pending_blobs[:max_pending]:
+            try:
+                result = process_blob_by_name(
+                    source_container=raw_container,
+                    source_blob_name=blob.name,
+                    run_type="gmail_intake_timer",
+                )
+                logging.info("Gmail intake timer processed %s: %s", blob.name, result)
+                processed += 1
+            except Exception:
+                logging.exception("Gmail intake timer failed to process pending blob %s", blob.name)
+
+        logging.info("Gmail intake timer processed %s pending blob(s)", processed)
     except Exception:
         logging.exception("Gmail intake timer failed")
         raise

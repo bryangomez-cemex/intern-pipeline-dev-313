@@ -87,6 +87,20 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 ## Session log (newest first)
 
 ### 2026-06-29 — Codex
+- Investigated Bryan's positions email not showing in Power BI.
+- Found Gmail intake worked: the attachment landed in `raw-uploads` as
+  `email_intake/20260629_191001_uid_7_data_(2).xlsx`.
+- Found the storage account currently has no Event Grid subscription, so
+  `process_raw_upload` was indexed but not being triggered automatically for the
+  new blob.
+- Updated `gmail_intake_timer` so every 5 minutes it now:
+  1. reads unread Gmail attachments into `raw-uploads`;
+  2. lists pending blobs in `raw-uploads`;
+  3. calls `process_blob_by_name(...)` for each pending blob, up to
+     `GMAIL_INTAKE_MAX_PENDING_BLOBS` (default 25).
+- This makes Gmail/email uploads self-contained even when Event Grid is missing.
+
+### 2026-06-29 — Codex
 - Switched active email path away from Azure Communication Services.
 - `scripts/email_service.py` now sends through Gmail SMTP using
   `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM_EMAIL`; Function App copy synced.

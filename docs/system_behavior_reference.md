@@ -15,7 +15,7 @@ Last reviewed: 2026-06-29. Current email state on the live Function App:
 | Path | Trigger | Timing | Real email? |
 |---|---|---|---|
 | Function App `process_raw_upload` | Event Grid on blob create in `raw-uploads/` | Near-instant | **Yes** |
-| Azure Function `gmail_intake_timer` | Timer trigger | Every 5 min | n/a |
+| Azure Function `gmail_intake_timer` | Timer trigger; reads Gmail and processes pending `raw-uploads` blobs | Every 5 min | n/a |
 | GitHub manual `mvp-ingestion.yml` | Manual `workflow_dispatch` for blob backfill | On demand | No (simulation) |
 | Gmail IMAP intake (in Azure) | Unread emails with allowed attachments; optional subject filter only if configured | Every 5 min | n/a |
 
@@ -24,7 +24,9 @@ Last reviewed: 2026-06-29. Current email state on the live Function App:
   is read from **blob metadata** set by the intake layer. Azure reads Gmail,
   uploads attachments to `raw-uploads`, and stamps that metadata on each blob.
 - A processed-blob guard (`fact_processed_blobs`) stops double-processing; the
-  instant Function App trigger normally wins, the cron is a backstop.
+  instant Function App trigger normally wins when Event Grid is configured. The
+  Gmail timer also processes pending blobs so email intake does not depend on
+  Event Grid.
 
 ---
 
