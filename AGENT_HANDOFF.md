@@ -99,6 +99,15 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
   3. calls `process_blob_by_name(...)` for each pending blob, up to
      `GMAIL_INTAKE_MAX_PENDING_BLOBS` (default 25).
 - This makes Gmail/email uploads self-contained even when Event Grid is missing.
+- Deployed this fix to Azure Function App.
+  - Deployment id: `ee0424a8-f984-447c-8fe6-d650bc7d033a`.
+  - Verified functions indexed: `gmail_intake_timer`, `process_raw_upload`,
+    `setup_database`, `setup_database_on_startup`.
+- Verified the stuck positions upload was processed:
+  - Raw blob `email_intake/20260629_191001_uid_7_data_(2).xlsx` moved to
+    `archive/processed/...` at `2026-06-29T19:30:04Z`.
+  - `dim_open_positions`: 33 current rows.
+  - `vw_powerbi_posiciones_abiertas`: 33 rows.
 
 ### 2026-06-29 — Codex
 - Switched active email path away from Azure Communication Services.
