@@ -94,7 +94,7 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
   ingestion + AUTO-number, current-intern sync (importe/importe_total/razon_social),
   requisition → REQ id, Gmail SMTP sending (Intern Confirmation / Coparmex→RH / HR Package
   all `Sent`), blob archival to `archive/processed`.
-- **🐞 BUG FOUND — baja email never fires.** Across all history: `inactive_or_baja Observed`
+- **🐞→✅ BUG FOUND & FIXED — baja email never fired (now fixed).** Across all history: `inactive_or_baja Observed`
   = 44, but `baja_requested` / `Baja De Practicante` communications = **0**. Cause:
   `prepare_baja_communication` is gated by `is_active_to_baja_transition(previous_status,
   incoming_status)` where `previous_status = get_effective_intern_status(...)`, which reads
@@ -102,8 +102,11 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
   alert (new_status=Inactivo) is recorded for the same row, so `previous_status` already
   reads `Inactivo` → transition is `inactive→inactive` → False → baja email is never
   prepared/sent. Detection (status flip, Power BI inactivos) works; only the RH baja
-  notification is missing. Fix: capture `previous_status` from `dim_interns.status_id`
-  BEFORE any inactive observation is written, or exclude same-run observation events.
+  notification was missing. **FIXED (commit `b20717f`, deployed + verified online):**
+  `previous_status` now reads `dim_interns.status_id` (the persisted value) before the
+  upsert, instead of `get_effective_intern_status` (which read lifecycle events). Verified
+  online: a fresh active intern marked inactive produced a `Baja De Practicante` **Sent**
+  communication + a `baja_requested` event.
 - Validation note: a roster row with an inactive status needs `Universidad` or it fails
   validation ("Missing university"); active rows pass without it.
 
