@@ -83,6 +83,23 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 
 ## Session log (newest first)
 
+### 2026-06-29 — Claude (Opus 4.8)
+- Added **costos por compania**: `razon_social_hc` on `dim_interns` (RAZON SOCIAL HC =
+  legal company name, distinct from CIA HC code) wired into the current-intern MERGE;
+  new `vw_powerbi_costos_por_compania` (importe_total = company cost, importe = pay, by
+  company). Applied live; backfilled the local roster sample (rest = "Sin compania"
+  until full roster re-sync).
+- **⚠️ Caused + fixed a regression**: while two agents were on this repo, my checkout
+  switched to local `main` (which is BEHIND `codex` — missing Codex's routing/NDA/acta
+  work). A deploy from that state briefly reverted Codex's work on the live app. Fixed:
+  re-applied the costos change on top of `codex` and redeployed (id `61ecb7f8`), verified
+  the package has BOTH Codex's work (routing, acta) AND costos. `origin/codex` (`6a459aa`)
+  is now the canonical, deployed source of truth.
+- **Lesson**: only one agent should edit/checkout this repo at a time. `origin/main`
+  (`6311e87`) is still behind `codex` — reconcile codex→main when Bryan is ready.
+  (My earlier main-based costos commits live on `origin/claude/costos-por-compania`,
+  now superseded by the codex re-apply — that branch can be deleted.)
+
 ### 2026-06-29 — Codex
 - Bryan re-authenticated GitHub CLI locally; `gh auth status` now passes for
   `bryangomez-cemex`.
