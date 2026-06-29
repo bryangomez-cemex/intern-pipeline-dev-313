@@ -442,6 +442,11 @@ vw_powerbi_posiciones_abiertas
 Cada upload reemplaza el snapshot actual marcando registros anteriores como
 `is_current = 0` y cargando la nueva version como `is_current = 1`.
 
+Si una fila no trae `#` / `numero`, o repite un numero dentro del mismo archivo,
+el sistema genera un numero unico con `dbo.seq_open_position_num` y lo guarda en
+`dim_open_positions.numero`. Los numeros generados empiezan en el rango `900000+`
+para no confundirse con IDs humanos del archivo.
+
 ## 7. Azure Blob Storage
 
 Container de entrada:
@@ -644,6 +649,22 @@ Regla de seguridad:
 | Datos faltantes para gestion Coparmex | RH | `Practicante procesado - faltan datos para Coparmex (...)` | Live, caso raro si matching no resolvio |
 | Campos organizacionales no resueltos | RH | `Campos organizacionales por completar - {archivo}` | Live, incluye Excel adjunto |
 | Baja | RH | `Baja De Practicante - {nombre}` | Live, best-effort |
+| Menu | Solicitante | `Menu - Sistema de Practicantes CEMEX` | Live, responde lista de acciones soportadas |
+
+### 9.3.1 Menu por correo
+
+Si un correo no leido contiene `Menu` en el subject o en el cuerpo del correo,
+sin importar mayusculas/minusculas ni acentos, el intake responde al remitente
+con una lista de acciones disponibles:
+
+- Lista de posiciones abiertas.
+- Base actual de practicantes.
+- Altas / nuevos practicantes.
+- Requisicion.
+- Paquete 1.
+- Convenio / NDA.
+
+Despues de responder, el correo se marca como leido para evitar respuestas duplicadas.
 
 ### 9.4 Attachments
 

@@ -87,6 +87,24 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 ## Session log (newest first)
 
 ### 2026-06-29 — Codex
+- Added automatic open-position number generation.
+  - Runtime creates/uses SQL sequence `dbo.seq_open_position_num`.
+  - If an uploaded open position has empty `#` / `numero`, or duplicates a number
+    already seen in that upload, the system assigns a generated unique number.
+  - Generated numbers use the `900000+` range to avoid confusion with human-entered
+    file values.
+  - Applied live SQL backfill: current `dim_open_positions` now has 33 current rows,
+    0 missing numbers, and 33 distinct numbers.
+- Added Gmail `Menu` request support.
+  - If an unread email contains `Menu` / `menu` / `menú` in subject or body, the
+    intake replies with supported system actions and marks the email as read.
+  - Menu reply lists: open positions, current roster sync, new hires, requisition,
+    Paquete 1, convenio/NDA.
+- Updated behavior/technical docs and Function App copies.
+- Validated with `py_compile`, `check_function_readiness`, `smoke_e2e_pipeline`,
+  menu detector assertions, and `git diff --check`.
+
+### 2026-06-29 — Codex
 - Investigated Bryan's positions email not showing in Power BI.
 - Found Gmail intake worked: the attachment landed in `raw-uploads` as
   `email_intake/20260629_191001_uid_7_data_(2).xlsx`.

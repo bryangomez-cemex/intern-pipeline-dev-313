@@ -9,6 +9,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from azure.storage.blob import BlobServiceClient
 
+import email_service
+
 
 # ============================================================
 # LOAD ENVIRONMENT VARIABLES
@@ -153,6 +155,20 @@ BODY_LABELS = [
     (["contacto de emergencia", "emergencia"], "contacto_emergencia"),
 ]
 
+MENU_BODY = """
+<h3>Menu - Sistema de Practicantes CEMEX</h3>
+<p>Estas son las acciones que puedes solicitar por correo:</p>
+<ul>
+  <li><b>Lista de posiciones abiertas</b>: adjunta Excel/CSV con columnas como #, Vacante, ID Vacante, Ubicacion, Promedio Dias Abierto, Responsable, AIRH, Jefe del Puesto, Estatus General.</li>
+  <li><b>Base actual de practicantes</b>: adjunta Excel/CSV actualizado para sincronizar activos, bajas, contratos y costos.</li>
+  <li><b>Altas / nuevos practicantes</b>: adjunta Excel/CSV con datos de nuevos ingresos; incluye requisition_id o position id cuando exista.</li>
+  <li><b>Requisicion</b>: adjunta el documento de requisicion en DOCX.</li>
+  <li><b>Paquete 1</b>: adjunta alta, CURP, constancia, identificacion, comprobante de domicilio y acta de nacimiento.</li>
+  <li><b>Convenio / NDA</b>: RH envia convenio y NDA DOCX; el candidato devuelve NDA firmado en PDF.</li>
+</ul>
+<p>El sistema usa el contenido del correo, metadata y adjuntos para clasificar el proceso. No se requiere un subject fijo.</p>
+"""
+
 
 def parse_intern_email_body(text):
     """Extract intern-supplied Label: value fields from an email body."""
@@ -170,6 +186,24 @@ def parse_intern_email_body(text):
                 out[field] = value[:200]
                 break
     return out
+
+
+def is_menu_request(subject, body):
+    text = f"{subject or ''}\n{body or ''}"
+    normalized = _strip_accents(text)
+    return re.search(r"\bmenu\b", normalized, flags=re.IGNORECASE) is not None
+
+
+def send_menu_response(sender_email):
+    if not sender_email or "@" not in sender_email:
+        return {"status": "skipped", "reason": "missing sender email"}
+    if sender_email.strip().lower() == safe_text(IMAP_USERNAME).lower():
+        return {"status": "skipped", "reason": "self email"}
+    return email_service.send_email(
+        to_email=sender_email,
+        subject="Menu - Sistema de Practicantes CEMEX",
+        html_body=MENU_BODY,
+    )
 
 
 def connect_imap():
@@ -248,6 +282,13 @@ def intake_gmail_attachments():
             import json as _json
             email_body = get_email_body(msg)
             sender_email, requisition_id = parse_sender_and_reqid(sender, subject, email_body)
+
+            if is_menu_request(subject, email_body):
+                result = send_menu_response(sender_email)
+                print(f"Menu response: {result.get('status')} to={sender_email}")
+                mail.store(email_id, "+FLAGS", "\\Seen")
+                continue
+
             body_fields = parse_intern_email_body(email_body)
             if body_fields:
                 print(f"Body fields parsed: {list(body_fields.keys())}")

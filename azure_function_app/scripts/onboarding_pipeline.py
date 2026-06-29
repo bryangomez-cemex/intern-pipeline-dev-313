@@ -754,6 +754,39 @@ def _to_int(value):
         return None
 
 
+def _ensure_open_position_sequence(cursor):
+    cursor.execute("""
+        IF NOT EXISTS (
+            SELECT 1
+            FROM sys.sequences
+            WHERE name = 'seq_open_position_num'
+              AND SCHEMA_NAME(schema_id) = 'dbo'
+        )
+        BEGIN
+            DECLARE @start INT = (
+                SELECT CASE
+                    WHEN ISNULL(MAX(numero), 0) >= 900000 THEN ISNULL(MAX(numero), 0) + 1
+                    ELSE 900000
+                END
+                FROM dbo.dim_open_positions
+            );
+            DECLARE @sql NVARCHAR(MAX) =
+                N'CREATE SEQUENCE dbo.seq_open_position_num AS INT START WITH '
+                + CAST(@start AS NVARCHAR(20)) + N' INCREMENT BY 1';
+            EXEC sp_executesql @sql;
+        END
+    """)
+
+
+def _next_open_position_num(cursor, used_numeros):
+    while True:
+        cursor.execute("SELECT NEXT VALUE FOR dbo.seq_open_position_num")
+        value = int(cursor.fetchone()[0])
+        if value not in used_numeros:
+            used_numeros.add(value)
+            return value
+
+
 def process_open_positions(local_path, meta=None):
     """Ingest a 'lista de posiciones actualmente abiertas' (open vacancies snapshot).
     Each upload replaces the current snapshot (is_current). Not a requisition."""
@@ -771,9 +804,11 @@ def process_open_positions(local_path, meta=None):
               jefe_puesto NVARCHAR(200) NULL, estatus_general NVARCHAR(200) NULL,
               is_current BIT NOT NULL DEFAULT 1, source_blob NVARCHAR(400) NULL,
               updated_at DATETIME2 DEFAULT SYSUTCDATETIME())""")
+        _ensure_open_position_sequence(cur)
         # snapshot replace: previous list is no longer current
         cur.execute("UPDATE dbo.dim_open_positions SET is_current = 0")
         loaded = 0
+        used_numeros = set()
         for _, raw in df.iterrows():
             row = {}
             for header, value in zip(headers, raw.tolist()):
@@ -786,12 +821,17 @@ def process_open_positions(local_path, meta=None):
             idv = row.get("id_vacante")
             if idv and str(idv).strip().upper() in ("NA", "N/A", "NONE", "-", ""):
                 idv = None
+            numero = _to_int(row.get("numero"))
+            if numero is None or numero in used_numeros:
+                numero = _next_open_position_num(cur, used_numeros)
+            else:
+                used_numeros.add(numero)
             cur.execute(
                 """INSERT INTO dbo.dim_open_positions
                    (position_row_id, numero, vacante, id_vacante, ubicacion, promedio_dias_abierto,
                     responsable, airh, jefe_puesto, estatus_general, is_current, source_blob)
                    VALUES (?,?,?,?,?,?,?,?,?,?,1,?)""",
-                "POS-" + str(uuid.uuid4())[:8], _to_int(row.get("numero")), row.get("vacante"), idv,
+                "POS-" + str(uuid.uuid4())[:8], numero, row.get("vacante"), idv,
                 row.get("ubicacion"), _to_int(row.get("promedio_dias_abierto")), row.get("responsable"),
                 row.get("airh"), row.get("jefe_puesto"), row.get("estatus_general"), meta.get("source_blob"))
             loaded += 1

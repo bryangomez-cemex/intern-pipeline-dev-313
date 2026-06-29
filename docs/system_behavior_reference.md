@@ -18,11 +18,14 @@ Last reviewed: 2026-06-29. Current email state on the live Function App:
 | Azure Function `gmail_intake_timer` | Timer trigger; reads Gmail and processes pending `raw-uploads` blobs | Every 5 min | n/a |
 | GitHub manual `mvp-ingestion.yml` | Manual `workflow_dispatch` for blob backfill | On demand | No (simulation) |
 | Gmail IMAP intake (in Azure) | Unread emails with allowed attachments; optional subject filter only if configured | Every 5 min | n/a |
+| Gmail menu request | Unread email whose subject or body contains `Menu`, case-insensitive | Every 5 min | **Yes** |
 
 - Ignored blob prefixes: `archive/ processed/ failed/ error-reports/ .`
 - Email context (`sender_email`, `email_subject`, `body_fields`, `requisition_id`)
   is read from **blob metadata** set by the intake layer. Azure reads Gmail,
   uploads attachments to `raw-uploads`, and stamps that metadata on each blob.
+- If an unread email contains `Menu` in the subject or body, the system replies
+  to the sender with the list of supported email actions and marks the email as read.
 - A processed-blob guard (`fact_processed_blobs`) stops double-processing; the
   instant Function App trigger normally wins when Event Grid is configured. The
   Gmail timer also processes pending blobs so email intake does not depend on
@@ -75,6 +78,9 @@ ready` (→ RH for review/forward), `File processed` (→ Intern), and
 dossier + "FAVOR DE GESTIONAR BAJA"). These are stored in `fact_communications`
 and sent live best-effort through Gmail SMTP when email simulation is off.
 
+`Menu - Sistema de Practicantes CEMEX` is sent immediately by the Gmail intake
+when a sender asks for `Menu`.
+
 ---
 
 ## 5. Recipients & resolution ⚙️
@@ -114,6 +120,8 @@ and sent live best-effort through Gmail SMTP when email simulation is off.
   only for scanned PDFs (<30 chars text) / images.
 - **Matching:** Position ID → personal email → full name; org enrichment via W1
   `dim_manager_assignments` keyed by jefe directo.
+- **Open positions:** if the uploaded positions list has an empty or duplicated
+  `#`, SQL generates a unique `numero` from `dbo.seq_open_position_num` and saves it.
 
 ---
 
