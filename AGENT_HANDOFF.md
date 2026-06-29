@@ -83,6 +83,19 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 
 ## Session log (newest first)
 
+### 2026-06-29 — Codex
+- Bryan re-authenticated GitHub CLI locally; `gh auth status` now passes for
+  `bryangomez-cemex`.
+- Ran `gh auth setup-git` so Git HTTPS pushes use the authenticated GitHub CLI
+  credentials.
+- Pushed the previously blocked commits to GitHub branch
+  `codex/intern-pipeline-production-readiness` (`b1c4805..21cf6e9`).
+- Azure deploy was already completed in the prior session and was not changed in
+  this step.
+- Still open: merge/push to `main` if Bryan wants the GitHub scheduled intake to
+  run from the updated workflow, then re-send or re-mark unread the positions
+  Excel email and verify `dim_open_positions`.
+
 ### 2026-06-26 — Codex
 - Updated routing and fallback behavior per Bryan's RH process notes.
 - Coparmex-ready emails now route to RH only via `RH_RECIPIENT_EMAILS`; RH reviews
