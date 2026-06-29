@@ -87,6 +87,17 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 ## Session log (newest first)
 
 ### 2026-06-29 — Codex
+- Adjusted existing Power BI open-positions view only; no new Power BI table/view
+  was created.
+- `vw_powerbi_posiciones_abiertas.id_vacante` now returns the real `ID Vacante`
+  when present, otherwise `AUTO-{numero}` using the generated unique position
+  number.
+- Applied live SQL and verified:
+  - `vw_powerbi_posiciones_abiertas`: 33 current rows.
+  - `blank_vacante_id`: 0.
+  - Missing source IDs now show values such as `AUTO-900030`.
+
+### 2026-06-29 — Codex
 - Added automatic open-position number generation.
   - Runtime creates/uses SQL sequence `dbo.seq_open_position_num`.
   - If an uploaded open position has empty `#` / `numero`, or duplicates a number

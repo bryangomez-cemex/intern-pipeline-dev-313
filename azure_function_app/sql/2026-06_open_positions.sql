@@ -73,7 +73,7 @@ CREATE OR ALTER VIEW dbo.vw_powerbi_posiciones_abiertas AS
 SELECT
     numero,
     vacante,
-    id_vacante,
+    COALESCE(NULLIF(LTRIM(RTRIM(id_vacante)), ''), CONCAT('AUTO-', CAST(numero AS NVARCHAR(20)))) AS id_vacante,
     ubicacion,
     promedio_dias_abierto,
     responsable,
