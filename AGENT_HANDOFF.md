@@ -83,6 +83,19 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 
 ## Session log (newest first)
 
+### 2026-06-27 — Claude (Opus 4.8)
+- Added **costos por compania**: `razon_social_hc` column on `dim_interns` (RAZON
+  SOCIAL HC = legal company name, e.g. "SERVICIOS PROFESIONALES CEMEX, S.A. DE C.V.",
+  distinct from CIA HC which is a code), wired into the current-intern MERGE; new
+  `vw_powerbi_costos_por_compania` summing `importe_total` (company cost) and `importe`
+  (pay) by company. Backfilled the local roster sample (8 rows); the rest show "Sin
+  compania" until the full roster re-sync. Applied live + deployed (id `c1a88dca`).
+- **⚠️ Branch divergence**: `origin/main` (`6311e87`) is BEHIND the
+  `codex/intern-pipeline-production-readiness` branch — main is missing the `f1a6f70`
+  routing/intake refactor (which IS deployed to Azure) and this cost/razon_social work.
+  The codex branch is the deployed, latest source of truth; `origin/codex` was updated.
+  Reconcile codex→main when ready (Bryan's call — pushes/merges to main need his OK).
+
 ### 2026-06-26 — Codex
 - Pushed the production-readiness follow-up fixes to GitHub `main`.
   - `main` moved from `60ce411` to `6bab18e` (`Merge production readiness follow-up fixes`).
