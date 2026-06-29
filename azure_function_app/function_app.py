@@ -86,6 +86,7 @@ SQL_SETUP_ORDER = [
     "2026-06_powerbi_refinements.sql",
     "2026-06_open_positions.sql",
     "2026-06_cost_columns.sql",
+    "2026-06_costos_por_compania.sql",
 ]
 
 
