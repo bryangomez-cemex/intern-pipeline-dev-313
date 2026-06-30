@@ -86,6 +86,23 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
 
 ## Session log (newest first)
 
+### 2026-06-30 — Claude (Opus 4.8)
+- `gmail_intake_timer` now runs **every 1 min** (was 5) — `function_app.py` schedule
+  `0 */1 * * * *`. Cost impact negligible (short runs, within the free grant).
+- **Schema declutter** (`2026-06_schema_cleanup.sql`, applied live, Bryan confirmed):
+  dropped 3 empty/unused matching-engine tables (`fact_entity_matches`,
+  `fact_match_candidates`, `fact_match_conflicts`) and **22 legacy views** (all
+  `vw_full_mvp_*` except `_missing_items`; `vw_canonical_*` except `_intern_documents`;
+  `vw_matching_engine_*`; `vw_pipeline_files/summary`; `vw_requisitions_status`;
+  `vw_validation_errors`; `vw_schema_consolidation_recommendations`). **32→29 tables,
+  43→21 `vw_*` views.** Kept all `vw_powerbi_*` + the 6 internal views they depend on
+  (`vw_business_validation_exceptions`, `vw_canonical_intern_documents`,
+  `vw_communications_status`, `vw_full_mvp_missing_items`, `vw_interns_current`,
+  `vw_hr_actions_today`). Verified the powerbi views still return data. Views are
+  recreatable from the SQL files. Trimmed dropped-view refs from smoke/readiness scripts.
+  Note: `matching_engine.py` is now fully unused (kept the file; only `deployment_readiness_e2e.py`
+  still imports it) — candidate to remove later.
+
 ### 2026-06-29 — Claude (Opus 4.8)
 - Ran a full **online** end-to-end test (uploaded fake `ZZZTEST` files to `raw-uploads`,
   let the live `gmail_intake_timer` process them, verified in Azure SQL). All fake data
