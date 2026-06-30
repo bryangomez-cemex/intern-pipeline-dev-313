@@ -128,7 +128,6 @@ SQL_SETUP_ORDER = [
     "2026-06_package1_document_requirements.sql",
     "2026-06_resolve_stale_missing_items.sql",
     "add_corporate_column_aliases.sql",
-    "create_matching_engine_v1.sql",
     "create_business_powerbi_views.sql",
     "2026-06_onboarding_schema.sql",
     "2026-06_schema_simplification.sql",
@@ -137,6 +136,7 @@ SQL_SETUP_ORDER = [
     "2026-06_open_positions.sql",
     "2026-06_cost_columns.sql",
     "2026-06_costos_por_compania.sql",
+    "2026-06_schema_cleanup.sql",
 ]
 
 
