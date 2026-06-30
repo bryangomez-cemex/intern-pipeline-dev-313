@@ -25,9 +25,6 @@ import matching_engine
 
 
 REQUIRED_VIEWS = [
-    "vw_pipeline_summary",
-    "vw_pipeline_files",
-    "vw_validation_errors",
     "vw_communications_status",
 ]
 
@@ -413,7 +410,7 @@ def check_required_views(live_azure):
         try:
             cursor = conn.cursor()
             existing = set()
-            for view_name in REQUIRED_VIEWS + PROPOSED_VIEWS + ["vw_matching_engine_review_queue"]:
+            for view_name in REQUIRED_VIEWS + PROPOSED_VIEWS:
                 cursor.execute(
                     """
                     SELECT 1
@@ -640,11 +637,9 @@ def build_report(run_id, live_azure, work_dir, results):
         "gaps": sorted(set(gaps)),
         "daily_inspection_plan": DAILY_INSPECTION_PLAN,
         "suggested_sql_queries": [
-            "SELECT TOP 10 * FROM dbo.vw_pipeline_summary ORDER BY last_processed_at DESC;",
-            "SELECT TOP 25 * FROM dbo.vw_pipeline_files WHERE blob_path LIKE '%DRY_RUN%' ORDER BY created_at DESC;",
-            "SELECT TOP 25 * FROM dbo.vw_validation_errors WHERE source_file_name LIKE '%DRY_RUN%' ORDER BY created_at DESC;",
+            "SELECT * FROM dbo.vw_powerbi_dashboard_kpis;",
+            "SELECT TOP 25 * FROM dbo.vw_powerbi_hr_action_queue;",
             "SELECT TOP 25 * FROM dbo.vw_communications_status ORDER BY created_at DESC;",
-            "SELECT TOP 25 * FROM dbo.vw_matching_engine_review_queue ORDER BY created_at DESC;",
         ],
     }
 

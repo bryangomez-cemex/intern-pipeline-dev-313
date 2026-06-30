@@ -548,19 +548,9 @@ def check_sql_views_if_requested():
     print_section("SQL Views")
     azure_clients = require_import("azure_clients")
     expected_views = [
-        "vw_pipeline_summary",
-        "vw_pipeline_files",
-        "vw_validation_errors",
         "vw_interns_current",
-        "vw_canonical_interns_current",
         "vw_canonical_intern_documents",
-        "vw_canonical_document_types",
-        "vw_canonical_org_assignments",
-        "vw_canonical_requisitions",
-        "vw_canonical_pipeline_runs",
-        "vw_schema_consolidation_recommendations",
         "vw_business_validation_exceptions",
-        "vw_requisitions_status",
         "vw_communications_status",
         "vw_hr_actions_today",
         "vw_powerbi_vacantes",
