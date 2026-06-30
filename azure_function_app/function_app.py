@@ -70,7 +70,7 @@ def process_raw_upload(inputblob: func.InputStream):
 
 
 @app.schedule(
-    schedule="0 */5 * * * *",
+    schedule="0 */1 * * * *",
     arg_name="gmail_timer",
     run_on_startup=False,
     use_monitor=True,
