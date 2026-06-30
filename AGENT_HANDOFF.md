@@ -100,8 +100,18 @@ Owner: Bryan (bryan.gomez@ext.cemex.com). Production system: CEMEX intern pipeli
   `vw_communications_status`, `vw_full_mvp_missing_items`, `vw_interns_current`,
   `vw_hr_actions_today`). Verified the powerbi views still return data. Views are
   recreatable from the SQL files. Trimmed dropped-view refs from smoke/readiness scripts.
-  Note: `matching_engine.py` is now fully unused (kept the file; only `deployment_readiness_e2e.py`
-  still imports it) — candidate to remove later.
+- **Repo declutter** (commit `e5fe448`, redeployed + verified): removed **16 dead Python
+  modules** (matching_engine, legacy email path graph_email_client/
+  send_prepared_communications/send_real_dev_email_smtp/test_email_service, obsolete dev
+  drivers alta_extractor/intake_local_folder/run_intake_pipeline/process_blob_file/
+  process_requisition/run_test_intake/test_sql_connection/send_expired_active_contracts_email/
+  run_azure_sql_*_container, stale deployment_readiness_e2e), **3 orphan SQL**
+  (create_matching_engine_v1, 2026-06_email_recipients_seed, add_requisition_content_columns),
+  **2 obsolete docs** (claude_code_handoff_20260625, power_automate_outlook_to_blob). scripts
+  31→15, sql 20→17, docs 12→10. Kept the 11 app modules + run_mvp_ingestion (cron),
+  sync_function_modules, smoke_e2e_pipeline, check_function_readiness. Verified no broken
+  imports + app still Running with 4 functions. (Local `EXAMPLES/` and `data/` are gitignored
+  test data — left in place; delete locally if unwanted.)
 
 ### 2026-06-29 — Claude (Opus 4.8)
 - Ran a full **online** end-to-end test (uploaded fake `ZZZTEST` files to `raw-uploads`,
