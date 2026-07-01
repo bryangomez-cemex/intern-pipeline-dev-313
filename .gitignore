@@ -19,8 +19,10 @@ data/test_processed_uids.txt
 
 EXAMPLES/
 
+intake_files/
 intake_files_processed/
 intake_files_failed/
+config/
 
 azure_function_app/local.settings.json
 azure_function_app/.venv/
